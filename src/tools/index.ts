@@ -17,6 +17,15 @@ import {
   getReminders,
   parseTimeExpression,
 } from "../reminders/index.js";
+import {
+  isCalendarConfigured,
+  getTodayEvents,
+  getEvents,
+  addEvent,
+  deleteEvent,
+  formatEvent,
+  parseDateExpression,
+} from "../calendar/index.js";
 
 const execAsync = promisify(exec);
 
@@ -236,6 +245,66 @@ Examples of time expressions you can parse:
       required: ["id"],
     },
   },
+  {
+    name: "get_calendar_events",
+    description: `Get calendar events. Use when the user asks about their schedule.
+
+Examples:
+- "오늘 일정 뭐야?" → date_range: "today"
+- "내일 스케줄 알려줘" → date_range: "tomorrow"
+- "이번 주 일정" → date_range: "week"`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        date_range: {
+          type: "string",
+          enum: ["today", "tomorrow", "week"],
+          description: "The date range to query",
+        },
+      },
+      required: ["date_range"],
+    },
+  },
+  {
+    name: "add_calendar_event",
+    description: `Add a new calendar event. Use when the user wants to schedule something.
+
+Examples:
+- "내일 3시에 회의 잡아줘" → title: "회의", time_expr: "내일 오후 3시"
+- "모레 오전 10시 치과" → title: "치과", time_expr: "모레 오전 10시"`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "Event title",
+        },
+        time_expr: {
+          type: "string",
+          description: "Time expression in Korean (e.g., '내일 오후 3시', '모레 오전 10시')",
+        },
+        description: {
+          type: "string",
+          description: "Optional event description",
+        },
+      },
+      required: ["title", "time_expr"],
+    },
+  },
+  {
+    name: "delete_calendar_event",
+    description: "Delete a calendar event by its ID.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        event_id: {
+          type: "string",
+          description: "The event ID to delete",
+        },
+      },
+      required: ["event_id"],
+    },
+  },
 ];
 
 // Tool 실행 함수
@@ -441,6 +510,100 @@ export async function executeTool(
         }
       }
 
+      case "get_calendar_events": {
+        const configured = await isCalendarConfigured();
+        if (!configured) {
+          return "Error: Google Calendar not configured. Ask user to set it up with /calendar_setup";
+        }
+
+        const dateRange = input.date_range as string;
+        const now = new Date();
+        let start: Date;
+        let end: Date;
+
+        switch (dateRange) {
+          case "today":
+            start = new Date(now);
+            start.setHours(0, 0, 0, 0);
+            end = new Date(now);
+            end.setHours(23, 59, 59, 999);
+            break;
+          case "tomorrow":
+            start = new Date(now);
+            start.setDate(start.getDate() + 1);
+            start.setHours(0, 0, 0, 0);
+            end = new Date(start);
+            end.setHours(23, 59, 59, 999);
+            break;
+          case "week":
+            start = new Date(now);
+            start.setHours(0, 0, 0, 0);
+            end = new Date(now);
+            end.setDate(end.getDate() + 7);
+            end.setHours(23, 59, 59, 999);
+            break;
+          default:
+            return "Error: Invalid date range";
+        }
+
+        const events = await getEvents(start, end);
+
+        if (events.length === 0) {
+          return `No events found for ${dateRange}.`;
+        }
+
+        const eventList = events.map((e) => {
+          const formatted = formatEvent(e);
+          return `- ${formatted} (ID: ${e.id})`;
+        });
+
+        const dateLabel = dateRange === "today" ? "오늘" : dateRange === "tomorrow" ? "내일" : "이번 주";
+        return `${dateLabel} 일정:\n${eventList.join("\n")}`;
+      }
+
+      case "add_calendar_event": {
+        const configured = await isCalendarConfigured();
+        if (!configured) {
+          return "Error: Google Calendar not configured. Ask user to set it up with /calendar_setup";
+        }
+
+        const title = input.title as string;
+        const timeExpr = input.time_expr as string;
+        const description = input.description as string | undefined;
+
+        const parsed = parseDateExpression(timeExpr);
+        if (!parsed) {
+          return `Error: Could not parse time "${timeExpr}". Try formats like "내일 오후 3시", "모레 오전 10시"`;
+        }
+
+        const event = await addEvent(title, parsed.start, parsed.end, description);
+
+        const timeStr = parsed.start.toLocaleString("ko-KR", {
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "numeric",
+        });
+
+        return `Event created: "${title}" at ${timeStr}`;
+      }
+
+      case "delete_calendar_event": {
+        const configured = await isCalendarConfigured();
+        if (!configured) {
+          return "Error: Google Calendar not configured.";
+        }
+
+        const eventId = input.event_id as string;
+        const success = await deleteEvent(eventId);
+
+        if (success) {
+          return `Event deleted.`;
+        } else {
+          return `Event not found or could not be deleted.`;
+        }
+      }
+
       default:
         return `Error: Unknown tool: ${name}`;
     }
@@ -479,6 +642,11 @@ export function getToolsDescription(modelId: ModelId): string {
 - set_reminder: 알림 설정 ("10분 후", "내일 9시" 등)
 - list_reminders: 활성 리마인더 목록
 - cancel_reminder: 리마인더 취소
+
+## 캘린더 (Google Calendar)
+- get_calendar_events: 일정 조회 (today, tomorrow, week)
+- add_calendar_event: 일정 추가
+- delete_calendar_event: 일정 삭제
 
 ## 온보딩
 - save_persona: 페르소나 설정 저장 (온보딩 완료 시)

@@ -19,6 +19,16 @@ import {
 import { getToolsDescription } from "../tools/index.js";
 import { getSecret, setSecret } from "../config/secrets.js";
 import { setBotInstance, restoreReminders, getReminders } from "../reminders/index.js";
+import {
+  isCalendarConfigured,
+  hasCredentials,
+  setCredentials,
+  getAuthUrl,
+  startAuthServer,
+  exchangeCodeForToken,
+  getTodayEvents,
+  formatEvent,
+} from "../calendar/index.js";
 
 // 워크스페이스 캐시
 let cachedWorkspace: Workspace | null = null;
@@ -329,6 +339,7 @@ export function createBot(token: string): Bot {
   // /setup 명령어 - 추가 기능 설정 목록
   bot.command("setup", async (ctx) => {
     const weatherKey = await getSecret("openweathermap-api-key");
+    const calendarConfigured = await isCalendarConfigured();
 
     const features = [
       {
@@ -336,7 +347,11 @@ export function createBot(token: string): Bot {
         command: "/weather_setup",
         configured: !!weatherKey,
       },
-      // 향후 추가 기능은 여기에 추가
+      {
+        name: "Google Calendar",
+        command: "/calendar_setup",
+        configured: calendarConfigured,
+      },
     ];
 
     let message = "⚙️ 추가 기능 설정\n\n";
@@ -398,6 +413,141 @@ export function createBot(token: string): Bot {
     message += "취소하려면 \"리마인더 취소해줘\" 라고 말해주세요.";
 
     await ctx.reply(message);
+  });
+
+  // /calendar_setup 명령어 - Google Calendar 연동
+  bot.command("calendar_setup", async (ctx) => {
+    const args = ctx.message?.text?.split(" ").slice(1) || [];
+
+    // 현재 상태 확인
+    if (args.length === 0) {
+      const configured = await isCalendarConfigured();
+      const hasCreds = await hasCredentials();
+
+      if (configured) {
+        // 오늘 일정 미리보기
+        try {
+          const events = await getTodayEvents();
+          const preview = events.length > 0
+            ? events.slice(0, 3).map(formatEvent).join("\n")
+            : "오늘 일정 없음";
+
+          await ctx.reply(
+            `📅 Google Calendar 연동됨!\n\n` +
+            `오늘 일정:\n${preview}\n\n` +
+            `"오늘 일정 뭐야?" 라고 물어보세요.`
+          );
+        } catch {
+          await ctx.reply(`📅 Google Calendar 연동됨!\n\n"오늘 일정 뭐야?" 라고 물어보세요.`);
+        }
+        return;
+      }
+
+      if (hasCreds) {
+        // credentials 있지만 인증 안됨
+        const authUrl = await getAuthUrl();
+        if (authUrl) {
+          await ctx.reply(
+            `📅 Google Calendar 인증 필요\n\n` +
+            `아래 링크에서 인증해주세요:\n${authUrl}\n\n` +
+            `인증 후 자동으로 연결됩니다.`
+          );
+
+          // 백그라운드에서 인증 서버 시작
+          startAuthServer()
+            .then(async (code) => {
+              const success = await exchangeCodeForToken(code);
+              if (success) {
+                await ctx.reply("✅ Google Calendar 연동 완료!");
+              } else {
+                await ctx.reply("❌ 인증 실패. 다시 시도해주세요.");
+              }
+            })
+            .catch(() => {
+              // 타임아웃 등
+            });
+        }
+        return;
+      }
+
+      // 설정 안내
+      await ctx.reply(
+        `📅 Google Calendar 설정\n\n` +
+        `1. Google Cloud Console 접속\n` +
+        `   console.cloud.google.com\n\n` +
+        `2. 프로젝트 생성 → Calendar API 활성화\n\n` +
+        `3. OAuth 동의 화면 설정\n` +
+        `   - 앱 이름: CompanionBot\n` +
+        `   - 범위: calendar.readonly, calendar.events\n\n` +
+        `4. 사용자 인증 정보 → OAuth 클라이언트 ID\n` +
+        `   - 유형: 데스크톱 앱\n` +
+        `   - 리디렉션 URI: http://localhost:3847/oauth2callback\n\n` +
+        `5. 클라이언트 ID와 Secret 복사 후:\n` +
+        `/calendar_setup CLIENT_ID CLIENT_SECRET`
+      );
+      return;
+    }
+
+    // credentials 설정
+    if (args.length === 2) {
+      const [clientId, clientSecret] = args;
+      await setCredentials(clientId, clientSecret);
+
+      const authUrl = await getAuthUrl();
+      if (authUrl) {
+        await ctx.reply(
+          `✅ Credentials 저장됨!\n\n` +
+          `아래 링크에서 인증해주세요:\n${authUrl}\n\n` +
+          `인증 완료 후 자동으로 연결됩니다.`
+        );
+
+        // 인증 서버 시작
+        startAuthServer()
+          .then(async (code) => {
+            const success = await exchangeCodeForToken(code);
+            if (success) {
+              await ctx.reply("✅ Google Calendar 연동 완료!");
+            } else {
+              await ctx.reply("❌ 인증 실패. 다시 시도해주세요.");
+            }
+          })
+          .catch(() => {
+            // 타임아웃
+          });
+      }
+      return;
+    }
+
+    await ctx.reply("사용법: /calendar_setup CLIENT_ID CLIENT_SECRET");
+  });
+
+  // /calendar 명령어 - 오늘 일정 보기
+  bot.command("calendar", async (ctx) => {
+    const configured = await isCalendarConfigured();
+
+    if (!configured) {
+      await ctx.reply("📅 캘린더가 연동되지 않았어요.\n/calendar_setup 으로 설정해주세요.");
+      return;
+    }
+
+    try {
+      const events = await getTodayEvents();
+
+      if (events.length === 0) {
+        await ctx.reply("📅 오늘 일정이 없어요!");
+        return;
+      }
+
+      let message = "📅 오늘 일정\n\n";
+      for (const event of events) {
+        message += `• ${formatEvent(event)}\n`;
+      }
+
+      await ctx.reply(message);
+    } catch (error) {
+      console.error("Calendar error:", error);
+      await ctx.reply("캘린더 조회 중 오류가 발생했어요.");
+    }
   });
 
   // 사진 메시지 처리
