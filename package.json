@@ -11,15 +11,15 @@
     "companion",
     "anthropic"
   ],
-  "author": "hwai",
+  "author": "DinN0000",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hwai/companionbot.git"
+    "url": "https://github.com/DinN0000/CompanionBot.git"
   },
-  "homepage": "https://github.com/hwai/companionbot#readme",
+  "homepage": "https://github.com/DinN0000/CompanionBot#readme",
   "bugs": {
-    "url": "https://github.com/hwai/companionbot/issues"
+    "url": "https://github.com/DinN0000/CompanionBot/issues"
   },
   "type": "module",
   "engines": {

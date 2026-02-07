@@ -158,7 +158,7 @@ export async function clearSession(chatId: number): Promise<void> {
 **Step 2: Verify TypeScript compiles**
 
 ```bash
-cd /Users/hwai/Documents/companionbot && npx tsc --noEmit
+npx tsc --noEmit
 ```
 
 Expected: No errors
@@ -271,7 +271,7 @@ export function getCurrentChatId(): number | null {
 **Step 2: Verify TypeScript compiles**
 
 ```bash
-cd /Users/hwai/Documents/companionbot && npx tsc --noEmit
+npx tsc --noEmit
 ```
 
 Expected: No errors
@@ -324,7 +324,7 @@ You can:
 - Run commands: Use run_command for git, npm, and other safe commands
 - Change model: Use change_model to switch AI models
 
-Allowed directories: /Users/hwai/Documents, /Users/hwai/projects
+Allowed directories: ~/Documents, ~/projects
 
 Current model: ${model.name}
 Available models:
@@ -451,7 +451,7 @@ export function createBot(token: string): Bot {
 **Step 2: Verify TypeScript compiles**
 
 ```bash
-cd /Users/hwai/Documents/companionbot && npx tsc --noEmit
+npx tsc --noEmit
 ```
 
 Expected: No errors
@@ -507,7 +507,7 @@ Note: `setModel` is now async, so `executeTool` needs to await it. The function 
 **Step 2: Verify TypeScript compiles**
 
 ```bash
-cd /Users/hwai/Documents/companionbot && npx tsc --noEmit
+npx tsc --noEmit
 ```
 
 Expected: No errors
@@ -526,7 +526,7 @@ git commit -m "feat: update tools to use async setModel"
 **Step 1: Start the bot**
 
 ```bash
-cd /Users/hwai/Documents/companionbot && npm run dev
+npm run dev
 ```
 
 **Step 2: Send test messages in Telegram**

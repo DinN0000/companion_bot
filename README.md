@@ -29,7 +29,7 @@ companionbot
 ### 개발자 설치 (소스코드 수정)
 
 ```bash
-git clone https://github.com/hwai/companionbot.git
+git clone https://github.com/DinN0000/CompanionBot.git
 cd companionbot
 npm install
 npm run build

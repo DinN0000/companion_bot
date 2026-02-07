@@ -42,11 +42,14 @@ import {
 
 const execAsync = promisify(exec);
 
+// 홈 디렉토리
+const home = process.env.HOME || "";
+
 // 허용된 디렉토리 (보안을 위해 제한)
 function getAllowedPaths(): string[] {
   return [
-    "/Users/hwai/Documents",
-    "/Users/hwai/projects",
+    path.join(home, "Documents"),
+    path.join(home, "projects"),
     getWorkspacePath(), // 워크스페이스 경로 추가
   ];
 }
@@ -89,7 +92,7 @@ function isPathAllowed(targetPath: string): boolean {
 
     const allowedPaths = getAllowedPaths();
 
-    // 정확한 경로 구분자로 비교 (startsWith만으로는 /Users/hwai/DocumentsEvil 같은 경로 통과)
+    // 정확한 경로 구분자로 비교 (startsWith만으로는 ~/DocumentsEvil 같은 경로 통과)
     return allowedPaths.some((allowed) => {
       const normalizedAllowed = path.resolve(allowed);
       return realPath === normalizedAllowed ||
@@ -474,7 +477,7 @@ export async function executeTool(
 
       case "run_command": {
         const command = input.command as string;
-        const cwd = (input.cwd as string) || "/Users/hwai/Documents";
+        const cwd = (input.cwd as string) || path.join(home, "Documents");
 
         // 화이트리스트 방식: 허용된 명령어만 실행
         const ALLOWED_COMMANDS = [
@@ -906,5 +909,5 @@ export function getToolsDescription(modelId: ModelId): string {
 ## 온보딩
 - save_persona: 페르소나 설정 저장 (온보딩 완료 시)
 
-허용된 경로: /Users/hwai/Documents, /Users/hwai/projects, 워크스페이스`;
+허용된 경로: ${path.join(home, "Documents")}, ${path.join(home, "projects")}, 워크스페이스`;
 }

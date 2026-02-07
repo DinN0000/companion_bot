@@ -13,7 +13,6 @@
 ### 시작 방법
 
 ```bash
-cd /Users/hwai/Documents/companionbot
 claude
 ```
 
@@ -33,7 +32,6 @@ Claude Code에서 입력:
 ## 봇 실행 방법
 
 ```bash
-cd /Users/hwai/Documents/companionbot
 npm run dev
 ```
 
