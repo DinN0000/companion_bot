@@ -2,14 +2,23 @@
   "name": "companionbot",
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "companionbot": "./bin/companionbot.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "templates"
+  ],
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsx src/cli/main.ts",
+    "start": "node dist/cli/main.js",
     "build": "tsc",
     "setup": "tsx src/cli/setup.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "cheerio": "^1.2.0",
     "grammy": "^1.31.0",
     "keytar": "^7.9.0"
   },

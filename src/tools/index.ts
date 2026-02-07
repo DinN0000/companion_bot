@@ -4,18 +4,28 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { MODELS, type ModelId } from "../ai/claude.js";
 import { getCurrentChatId, setModel, getModel } from "../session/state.js";
+import {
+  getWorkspacePath,
+  saveWorkspaceFile,
+  appendToMemory,
+  deleteBootstrap,
+} from "../workspace/index.js";
 
 const execAsync = promisify(exec);
 
 // 허용된 디렉토리 (보안을 위해 제한)
-const ALLOWED_PATHS = [
-  "/Users/hwai/Documents",
-  "/Users/hwai/projects",
-];
+function getAllowedPaths(): string[] {
+  return [
+    "/Users/hwai/Documents",
+    "/Users/hwai/projects",
+    getWorkspacePath(), // 워크스페이스 경로 추가
+  ];
+}
 
 function isPathAllowed(targetPath: string): boolean {
   const resolved = path.resolve(targetPath);
-  return ALLOWED_PATHS.some((allowed) => resolved.startsWith(allowed));
+  const allowedPaths = getAllowedPaths();
+  return allowedPaths.some((allowed) => resolved.startsWith(allowed));
 }
 
 // Tool 정의 (Claude API 형식)
@@ -113,6 +123,47 @@ Guidelines:
       required: ["model"],
     },
   },
+  {
+    name: "save_memory",
+    description: "Save important information about the user or conversation to long-term memory. Use this when you learn something new about the user that should be remembered.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        content: {
+          type: "string",
+          description: "The information to remember",
+        },
+        category: {
+          type: "string",
+          enum: ["user_info", "preference", "event", "project", "other"],
+          description: "Category of the memory",
+        },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "save_persona",
+    description: "Save persona settings after onboarding. Use this when the user has defined their companion's identity, soul, and shared their own info.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        identity: {
+          type: "string",
+          description: "Content for IDENTITY.md - name, vibe, emoji, intro",
+        },
+        soul: {
+          type: "string",
+          description: "Content for SOUL.md - personality, style, values, interests",
+        },
+        user: {
+          type: "string",
+          description: "Content for USER.md - user info, preferences",
+        },
+      },
+      required: ["identity", "soul", "user"],
+    },
+  },
 ];
 
 // Tool 실행 함수
@@ -191,10 +242,63 @@ export async function executeTool(
         return `Model changed: ${MODELS[oldModel].name} → ${newModel.name}${reason ? ` (${reason})` : ""}. The change will take effect from the next message.`;
       }
 
+      case "save_memory": {
+        const content = input.content as string;
+        const category = (input.category as string) || "other";
+
+        await appendToMemory(`[${category}] ${content}`);
+        return `Memory saved: ${content.slice(0, 50)}...`;
+      }
+
+      case "save_persona": {
+        const identity = input.identity as string;
+        const soul = input.soul as string;
+        const user = input.user as string;
+
+        // 각 파일 저장
+        await saveWorkspaceFile("IDENTITY.md", identity);
+        await saveWorkspaceFile("SOUL.md", soul);
+        await saveWorkspaceFile("USER.md", user);
+
+        // BOOTSTRAP.md 삭제
+        await deleteBootstrap();
+
+        return "Persona saved! BOOTSTRAP mode complete. I'm ready to chat with my new identity.";
+      }
+
       default:
         return `Error: Unknown tool: ${name}`;
     }
   } catch (error) {
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
   }
+}
+
+// 도구 설명 생성 (시스템 프롬프트용)
+export function getToolsDescription(modelId: ModelId): string {
+  const model = MODELS[modelId];
+
+  return `# 사용 가능한 도구
+
+현재 모델: ${model.name}
+
+## 파일 작업
+- read_file: 파일 읽기
+- write_file: 파일 생성/수정
+- list_directory: 디렉토리 탐색
+
+## 시스템
+- run_command: 셸 명령어 실행 (git, npm 등)
+- change_model: AI 모델 변경
+  - sonnet: 범용 (기본)
+  - opus: 복잡한 작업
+  - haiku: 간단한 작업
+
+## 기억
+- save_memory: 중요한 정보 저장
+
+## 온보딩
+- save_persona: 페르소나 설정 저장 (온보딩 완료 시)
+
+허용된 경로: /Users/hwai/Documents, /Users/hwai/projects, 워크스페이스`;
 }

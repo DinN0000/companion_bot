@@ -1,13 +1,23 @@
 import { getSecret, setSecret, deleteSecret } from "../config/secrets.js";
+import {
+  isWorkspaceInitialized,
+  initWorkspace,
+  getWorkspacePath,
+} from "../workspace/index.js";
 
 async function showStatus() {
   console.log("\n=== CompanionBot 설정 상태 ===\n");
 
   const telegram = await getSecret("telegram-token");
   const anthropic = await getSecret("anthropic-api-key");
+  const workspaceReady = await isWorkspaceInitialized();
 
   console.log(`Telegram Bot Token: ${telegram ? "✓ 설정됨" : "✗ 미설정"}`);
   console.log(`Anthropic API Key:  ${anthropic ? "✓ 설정됨" : "✗ 미설정"}`);
+  console.log(`워크스페이스:       ${workspaceReady ? "✓ 초기화됨" : "✗ 미초기화"}`);
+  if (workspaceReady) {
+    console.log(`  경로: ${getWorkspacePath()}`);
+  }
   console.log();
 }
 
@@ -65,15 +75,37 @@ async function main() {
         console.log("사용법: npm run setup delete <telegram|anthropic>");
       }
       break;
+    case "init":
+      if (await isWorkspaceInitialized()) {
+        console.log("워크스페이스가 이미 초기화되어 있습니다.");
+        console.log(`경로: ${getWorkspacePath()}`);
+      } else {
+        await initWorkspace();
+        console.log("✓ 워크스페이스 초기화 완료");
+        console.log(`경로: ${getWorkspacePath()}`);
+      }
+      break;
+    case "reset":
+      if (value === "workspace") {
+        const { rm } = await import("fs/promises");
+        await rm(getWorkspacePath(), { recursive: true, force: true });
+        await initWorkspace();
+        console.log("✓ 워크스페이스 초기화됨");
+      } else {
+        console.log("사용법: npm run setup reset workspace");
+      }
+      break;
     default:
       console.log(`
 CompanionBot 설정
 
 사용법:
-  npm run setup status                    현재 설정 상태 확인
-  npm run setup telegram <TOKEN>          Telegram Bot Token 설정
-  npm run setup anthropic <API_KEY>       Anthropic API Key 설정
-  npm run setup delete <telegram|anthropic>  키 삭제
+  npm run setup status                      현재 설정 상태 확인
+  npm run setup telegram <TOKEN>            Telegram Bot Token 설정
+  npm run setup anthropic <API_KEY>         Anthropic API Key 설정
+  npm run setup delete <telegram|anthropic> 키 삭제
+  npm run setup init                        워크스페이스 초기화
+  npm run setup reset workspace             워크스페이스 리셋
       `);
   }
 }

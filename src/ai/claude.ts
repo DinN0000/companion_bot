@@ -12,7 +12,12 @@ function getClient(): Anthropic {
 
 export type Message = {
   role: "user" | "assistant";
-  content: string | Anthropic.ContentBlock[];
+  content: string | Anthropic.ContentBlock[] | Anthropic.ContentBlockParam[];
+};
+
+export type ImageData = {
+  base64: string;
+  mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
 };
 
 export type ModelId = "sonnet" | "opus" | "haiku";
