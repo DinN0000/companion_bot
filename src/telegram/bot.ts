@@ -3,6 +3,7 @@ import { setBotInstance, restoreReminders } from "../reminders/index.js";
 import { setBriefingBot, restoreBriefings } from "../briefing/index.js";
 import { setHeartbeatBot, restoreHeartbeats } from "../heartbeat/index.js";
 import { setAgentBot } from "../agents/index.js";
+import { setCronBot, restoreCronJobs } from "../cron/index.js";
 import { registerCommands, registerMessageHandlers } from "./handlers/index.js";
 
 // Re-export for external use
@@ -34,6 +35,12 @@ export function createBot(token: string): Bot {
 
   // Sub-agent 시스템 초기화
   setAgentBot(bot);
+
+  // Cron 시스템 초기화
+  setCronBot(bot);
+  restoreCronJobs().catch((err) =>
+    console.error("Failed to restore cron jobs:", err)
+  );
 
   // 에러 핸들링
   bot.catch((err) => {

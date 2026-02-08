@@ -45,6 +45,14 @@ import {
   listAgents,
   cancelAgent,
 } from "../agents/index.js";
+import {
+  addCronJob,
+  listCronJobs,
+  removeCronJob,
+  setCronJobEnabled,
+  runCronJobNow,
+  parseScheduleExpression,
+} from "../cron/index.js";
 import * as cheerio from "cheerio";
 
 const execAsync = promisify(exec);
@@ -651,6 +659,110 @@ Examples:
         },
       },
       required: ["url"],
+    },
+  },
+  // ============== Cron 도구 ==============
+  {
+    name: "add_cron",
+    description: `Create a scheduled cron job. Use when the user wants to schedule recurring tasks.
+
+Schedule formats:
+- Cron expression: "0 9 * * *" (9AM daily), "0 9 * * 1-5" (weekdays 9AM)
+- Korean: "매일 아침 9시", "평일 오후 3시", "매주 월요일 10시"
+- Interval: "30분마다", "2시간마다"
+- One-time: "내일 오전 9시에", "2024-12-25 10:00"
+
+Examples:
+- "매일 아침 9시에 뉴스 알려줘" → name: "뉴스", schedule: "매일 아침 9시", payload: { kind: "agentTurn", message: "오늘 뉴스 요약해줘" }
+- "평일 오후 6시에 퇴근 알림" → name: "퇴근알림", schedule: "0 18 * * 1-5", payload: { kind: "agentTurn", message: "퇴근 시간이에요!" }`,
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        name: {
+          type: "string",
+          description: "Human-readable name for the cron job",
+        },
+        schedule: {
+          type: "string",
+          description: "Cron expression or Korean time expression (e.g., '0 9 * * *', '매일 아침 9시')",
+        },
+        payload: {
+          type: "object",
+          description: "Payload to execute. Use { kind: 'agentTurn', message: '...' } for agent messages",
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["agentTurn", "systemEvent"],
+            },
+            message: { type: "string" },
+            eventType: { type: "string" },
+            data: { type: "object" },
+            context: { type: "object" },
+          },
+          required: ["kind"],
+        },
+      },
+      required: ["name", "schedule", "payload"],
+    },
+  },
+  {
+    name: "list_crons",
+    description: "List all cron jobs for the current chat. Shows id, name, schedule, enabled status, and next run time.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        show_disabled: {
+          type: "boolean",
+          description: "Include disabled jobs in the list (default: true)",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "remove_cron",
+    description: "Delete a cron job by its ID.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "The cron job ID to delete",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "toggle_cron",
+    description: "Enable or disable a cron job.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "The cron job ID to toggle",
+        },
+        enabled: {
+          type: "boolean",
+          description: "Whether to enable (true) or disable (false) the job",
+        },
+      },
+      required: ["id", "enabled"],
+    },
+  },
+  {
+    name: "run_cron",
+    description: "Run a cron job immediately, regardless of its schedule. Useful for testing or manual triggers.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "The cron job ID to run immediately",
+        },
+      },
+      required: ["id"],
     },
   },
 ];
@@ -1416,6 +1528,151 @@ ${"─".repeat(40)}`;
         }
       }
 
+      // ============== Cron 도구 ==============
+      case "add_cron": {
+        const chatId = getCurrentChatId();
+        if (!chatId) {
+          return "Error: No active chat session";
+        }
+
+        const name = input.name as string;
+        const scheduleExpr = input.schedule as string;
+        const command = (input.payload as string) || (input.command as string) || "";
+
+        if (!name || !scheduleExpr) {
+          return "Error: name and schedule are required";
+        }
+
+        // 스케줄 파싱 (cron expression 또는 한국어)
+        const parsed = parseScheduleExpression(scheduleExpr);
+        const cronExpr = parsed ? parsed.expression : scheduleExpr;
+
+        try {
+          const result = await addCronJob(chatId, name, cronExpr, command);
+          
+          if (!result.success) {
+            return `Error: ${result.message}`;
+          }
+          
+          const job = result.data as { id: string; nextRun?: string };
+          const nextRunStr = job?.nextRun 
+            ? new Date(job.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })
+            : "계산 중...";
+
+          return `Cron job created! ⏰
+ID: ${job?.id || "unknown"}
+Name: ${name}
+Schedule: ${cronExpr}
+Next run: ${nextRunStr}`;
+        } catch (error) {
+          return `Error creating cron job: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+
+      case "list_crons": {
+        const chatId = getCurrentChatId();
+        if (!chatId) {
+          return "Error: No active chat session";
+        }
+
+        const showDisabled = (input.show_disabled as boolean) !== false;
+        const result = await listCronJobs(chatId);
+
+        if (!result.success) {
+          return `Error: ${result.message}`;
+        }
+
+        const jobs = (result.data as Array<{ id: string; name: string; enabled: boolean; cronExpr: string; nextRun?: string }>) || [];
+        const filteredJobs = showDisabled ? jobs : jobs.filter((j) => j.enabled);
+
+        if (filteredJobs.length === 0) {
+          return showDisabled 
+            ? "No cron jobs found for this chat."
+            : "No active cron jobs. Use list_crons with show_disabled=true to see all.";
+        }
+
+        const lines = filteredJobs.map((job) => {
+          const status = job.enabled ? "✅" : "⏸️";
+          const scheduleStr = job.cronExpr;
+          
+          const nextRun = job.nextRun
+            ? new Date(job.nextRun).toLocaleString("ko-KR", { 
+                month: "short", 
+                day: "numeric", 
+                hour: "2-digit", 
+                minute: "2-digit",
+                timeZone: "Asia/Seoul"
+              })
+            : "N/A";
+
+          return `${status} [${job.id.slice(0, 8)}] ${job.name || "(unnamed)"}
+   Schedule: ${scheduleStr}
+   Next run: ${nextRun}`;
+        });
+
+        return `Cron jobs (${filteredJobs.length}):\n\n${lines.join("\n\n")}`;
+      }
+
+      case "remove_cron": {
+        const chatId = getCurrentChatId();
+        if (!chatId) {
+          return "Error: No active chat session";
+        }
+
+        const id = input.id as string;
+        if (!id) {
+          return "Error: Cron job ID is required";
+        }
+
+        const result = await removeCronJob(id);
+        if (result.success) {
+          return `Cron job ${id} deleted.`;
+        } else {
+          return `Cron job ${id} not found.`;
+        }
+      }
+
+      case "toggle_cron": {
+        const chatId = getCurrentChatId();
+        if (!chatId) {
+          return "Error: No active chat session";
+        }
+
+        const id = input.id as string;
+        const enabled = input.enabled as boolean;
+
+        if (!id || enabled === undefined) {
+          return "Error: Both id and enabled are required";
+        }
+
+        const result = await setCronJobEnabled(id, enabled);
+        if (result.success) {
+          const status = enabled ? "enabled ✅" : "disabled ⏸️";
+          return `Cron job ${id} is now ${status}.`;
+        } else {
+          return `Cron job ${id} not found.`;
+        }
+      }
+
+      case "run_cron": {
+        const chatId = getCurrentChatId();
+        if (!chatId) {
+          return "Error: No active chat session";
+        }
+
+        const id = input.id as string;
+        if (!id) {
+          return "Error: Cron job ID is required";
+        }
+
+        const success = await runCronJobNow(id);
+        if (success) {
+          return `Cron job ${id} executed! 🚀`;
+        } else {
+          return `Error: Cron job ${id} not found.`;
+        }
+      }
+
       default:
         return `Error: Unknown tool: ${name}`;
     }
@@ -1484,6 +1741,16 @@ export function getToolsDescription(modelId: ModelId): string {
 ## 웹 검색/가져오기
 - web_search: Brave Search API로 웹 검색 (query, count)
 - web_fetch: URL에서 본문 텍스트 추출 (url, maxChars)
+
+## Cron (예약 작업)
+- add_cron: 예약 작업 생성
+  - name: 작업 이름
+  - schedule: cron 표현식 또는 한국어 ("0 9 * * *", "매일 아침 9시", "30분마다")
+  - payload: 실행할 작업 ({ kind: "agentTurn", message: "..." })
+- list_crons: 현재 채팅의 cron job 목록
+- remove_cron: cron job 삭제 (id)
+- toggle_cron: cron job 활성화/비활성화 (id, enabled)
+- run_cron: cron job 즉시 실행 (id) - 테스트/수동 트리거용
 
 허용된 경로: ${path.join(home, "Documents")}, ${path.join(home, "projects")}, 워크스페이스`;
 }
