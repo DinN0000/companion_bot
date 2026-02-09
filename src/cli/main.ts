@@ -33,8 +33,23 @@ async function interactiveSetup(): Promise<boolean> {
 ║             🤖 CompanionBot 첫 실행 가이드                    ║
 ╚═══════════════════════════════════════════════════════════════╝
 
-안녕하세요! CompanionBot 설정을 시작합니다.
-2가지 키만 입력하면 바로 사용할 수 있어요.
+CompanionBot은 Telegram에서 동작하는 개인 AI 비서예요.
+
+┌─────────────────────────────────────────────────────────────┐
+│  ✨ 이런 것들을 할 수 있어요:                               │
+├─────────────────────────────────────────────────────────────┤
+│  💬 자연스러운 대화      AI와 한국어로 자유롭게 대화       │
+│  📁 파일 읽기/쓰기       문서 작성, 코드 편집 가능         │
+│  🔍 웹 검색              최신 정보 검색 (Brave API)        │
+│  📅 캘린더 연동          일정 확인/추가 (Google Calendar)  │
+│  ⏰ 리마인더             알림 설정 ("3시에 알려줘")        │
+│  🧠 메모리 기능          대화 내용 기억, 장기 기억 저장    │
+│  📰 브리핑               매일 아침 날씨/일정/뉴스 요약     │
+└─────────────────────────────────────────────────────────────┘
+
+필수 설정 2개 + 선택 설정으로 시작합니다.
+
+💡 언제든지 'q'를 입력하면 설정을 취소할 수 있어요.
 `);
 
   try {
@@ -54,9 +69,9 @@ async function interactiveSetup(): Promise<boolean> {
    🔗 바로가기: https://t.me/BotFather
 `);
 
-    const token = await question(rl, "   Token을 붙여넣으세요: ");
-    if (!token) {
-      console.log("\n❌ 토큰이 필요합니다. 다시 실행해주세요.");
+    const token = await question(rl, "   Token을 붙여넣으세요 (q=취소): ");
+    if (!token || token.toLowerCase() === "q") {
+      console.log("\n👋 설정을 취소했습니다. 나중에 다시 실행하세요.");
       rl.close();
       return false;
     }
@@ -81,9 +96,10 @@ async function interactiveSetup(): Promise<boolean> {
    🔗 바로가기: https://console.anthropic.com/settings/keys
 `);
 
-    const apiKey = await question(rl, "   API Key를 붙여넣으세요: ");
-    if (!apiKey) {
-      console.log("\n❌ API 키가 필요합니다. 다시 실행해주세요.");
+    const apiKey = await question(rl, "   API Key를 붙여넣으세요 (q=취소): ");
+    if (!apiKey || apiKey.toLowerCase() === "q") {
+      console.log("\n👋 설정을 취소했습니다. 나중에 다시 실행하세요.");
+      console.log("   (Telegram 토큰은 이미 저장됨)");
       rl.close();
       return false;
     }
