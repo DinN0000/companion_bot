@@ -6,7 +6,7 @@ import { estimateMessagesTokens } from "../utils/tokens.js";
 // 세션 설정
 const MAX_SESSIONS = 100;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24시간
-const MAX_HISTORY_TOKENS = 50000; // 시스템 프롬프트 + 응답 여유 남기고
+const MAX_HISTORY_TOKENS = 40000; // 시스템 프롬프트(~10k) + 응답(~8k) 여유 남기고
 
 type SessionData = {
   history: Message[];
@@ -23,8 +23,8 @@ const chatIdStorage = new AsyncLocalStorage<number>();
 function getSession(chatId: number): SessionData {
   // chatId 유효성 검사
   if (chatId == null || isNaN(chatId)) {
-    console.warn(`[Session] Invalid chatId: ${chatId}, using fallback session`);
-    // 임시 세션 반환 (저장하지 않음)
+    console.error(`[Session] BUG: Invalid chatId: ${chatId} - history will NOT persist!`);
+    // 임시 세션 반환 (저장하지 않음) - 이건 버그 상황
     return {
       history: [],
       model: "sonnet",
@@ -37,6 +37,7 @@ function getSession(chatId: number): SessionData {
 
   if (existing) {
     existing.lastAccessedAt = now;
+    console.log(`[Session] Returning existing session for chatId=${chatId}, history length=${existing.history?.length ?? 0}`);
     return existing;
   }
 
@@ -49,6 +50,7 @@ function getSession(chatId: number): SessionData {
     lastAccessedAt: now,
   };
   sessions.set(chatId, session);
+  console.log(`[Session] Created new session for chatId=${chatId}, total sessions=${sessions.size}`);
   return session;
 }
 
@@ -76,9 +78,12 @@ function cleanupSessions(): void {
 
 export function getHistory(chatId: number): Message[] {
   const session = getSession(chatId);
+  // history가 없으면 초기화하고 세션에 저장
+  if (!session.history) {
+    session.history = [];
+  }
   // 참조 반환 (외부 수정 허용 - 의도적)
-  // 필요시 [...session.history]로 복사본 반환 가능
-  return session.history ?? [];
+  return session.history;
 }
 
 /**

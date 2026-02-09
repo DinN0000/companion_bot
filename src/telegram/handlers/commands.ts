@@ -201,7 +201,8 @@ export function registerCommands(bot: Bot): void {
     const chatId = ctx.chat.id;
     const history = getHistory(chatId);
 
-    if (history.length <= 4) {
+    // 메시지가 1개 이하면 요약 불가
+    if (history.length <= 1) {
       await ctx.reply("아직 정리할 대화가 별로 없어!");
       return;
     }
@@ -209,12 +210,30 @@ export function registerCommands(bot: Bot): void {
     // 현재 토큰 수 계산
     const currentTokens = estimateMessagesTokens(history);
     
+    // 메시지 개수가 적고 토큰도 적으면 스킵 (5000 토큰 = 약 한글 3000자)
+    // 단, 토큰이 많으면 메시지 개수와 관계없이 compact 허용
+    if (history.length <= 4 && currentTokens < 5000) {
+      await ctx.reply(`현재 ${history.length}개 메시지, ~${currentTokens} 토큰이라 충분히 짧아!`);
+      return;
+    }
+    
     await ctx.replyWithChatAction("typing");
     await ctx.reply(`📊 현재: ${history.length}개 메시지, ~${currentTokens} 토큰\n요약 생성 중...`);
 
     // 요약할 메시지와 유지할 최근 메시지 분리
-    const recentMessages = history.slice(-4);
-    const oldMessages = history.slice(0, -4);
+    // 메시지가 4개 이하면 (토큰이 많아서 여기 온 경우) 전체 요약 후 마지막만 유지
+    let recentMessages: Message[];
+    let oldMessages: Message[];
+    
+    if (history.length <= 4) {
+      // 토큰이 많아서 compact 진입한 경우: 전체 요약 → 마지막 1개만 유지
+      recentMessages = history.slice(-1);
+      oldMessages = history.slice(0, -1);
+    } else {
+      // 일반 경우: 마지막 4개 유지
+      recentMessages = history.slice(-4);
+      oldMessages = history.slice(0, -4);
+    }
 
     // 요약 생성
     const summary = await generateSummary(oldMessages);

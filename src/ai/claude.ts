@@ -215,6 +215,9 @@ export async function chat(
  * - 먼저 스트리밍으로 시도
  * - 도구 호출이 감지되면 (stop_reason === "tool_use") 기존 chat()으로 폴백
  * - 스트리밍은 최종 텍스트 응답에만 사용
+ * 
+ * 주의: 스트리밍은 재시도하지 않음 (이미 전송된 청크를 되돌릴 수 없음)
+ * 스트리밍 중 에러 발생 시 적절한 에러 메시지를 반환하거나 예외를 전파함
  */
 export async function chatSmart(
   messages: Message[],
@@ -254,16 +257,14 @@ export async function chatSmart(
   // (도구 호출 폴백 시 chat()에서 thinking 사용됨)
 
   let accumulated = "";
-  let stopReason: string | null = null;
+  let streamingStarted = false;
 
-  // 스트리밍에 withRetry 적용 - 실패 시 자동 재시도
-  return await withRetry(async () => {
-    accumulated = ""; // 재시도 시 초기화
-    
+  try {
     const stream = client.messages.stream(params);
 
     // 스트리밍 이벤트 처리
     stream.on("text", async (text) => {
+      streamingStarted = true;
       accumulated += text;
       try {
         await onChunk(text, accumulated);
@@ -275,9 +276,10 @@ export async function chatSmart(
 
     // 스트림 완료 대기
     const finalMessage = await stream.finalMessage();
-    stopReason = finalMessage.stop_reason;
+    const stopReason = finalMessage.stop_reason;
 
     // 도구 호출이 필요한 경우 - 일반 chat으로 폴백
+    // 주의: chat()은 내부에서 withRetry를 사용하므로 여기서 추가 재시도 불필요
     if (stopReason === "tool_use") {
       console.log("[Stream] Tool use detected, falling back to chat()");
       const text = await chat(messages, systemPrompt, modelId);
@@ -286,5 +288,33 @@ export async function chatSmart(
 
     // 성공적으로 스트리밍 완료
     return { text: accumulated, usedTools: false };
-  });
+  } catch (error: unknown) {
+    // 스트리밍 시작 전 에러 (연결 실패 등) - 재시도 가능
+    if (!streamingStarted && error instanceof APIError) {
+      // Rate limit 또는 서버 에러는 withRetry로 재시도
+      if (error.status === 429 || error.status >= 500) {
+        console.log(`[Stream] Pre-stream error (${error.status}), retrying with withRetry...`);
+        return await withRetry(async () => {
+          // 재시도 시 일반 chat 사용 (스트리밍 대신)
+          const text = await chat(messages, systemPrompt, modelId);
+          return { text, usedTools: false };
+        });
+      }
+    }
+
+    // 스트리밍 중 에러 - 재시도 불가 (이미 청크가 전송됨)
+    if (streamingStarted) {
+      console.error("[Stream] Error during streaming (cannot retry):", error);
+      // 이미 일부 텍스트가 전송됐으므로, 에러 메시지를 추가하거나 부분 결과 반환
+      if (accumulated.length > 0) {
+        return { 
+          text: accumulated + "\n\n(응답 생성 중 오류 발생)", 
+          usedTools: false 
+        };
+      }
+    }
+
+    // 그 외 에러는 전파
+    throw error;
+  }
 }

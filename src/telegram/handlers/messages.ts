@@ -16,7 +16,7 @@ import {
 import { estimateMessagesTokens } from "../../utils/tokens.js";
 
 const MAX_CONTEXT_TOKENS = 100000; // Claude 컨텍스트
-const COMPACTION_THRESHOLD = 0.6; // 60%
+const COMPACTION_THRESHOLD = 0.35; // 35% (35,000 토큰) - MAX_HISTORY_TOKENS(50k)보다 먼저 트리거되도록
 
 /**
  * 토큰 사용량이 임계치를 넘으면 자동으로 히스토리 압축
@@ -199,17 +199,33 @@ export function registerMessageHandlers(bot: Bot): void {
 
           await ctx.reply(result);
         } catch (innerError) {
-          // 에러 시 방금 추가한 사용자 메시지 롤백 (히스토리 오염 방지)
-          history.pop();
-          throw innerError;
+          // 에러 발생해도 사용자 메시지는 보존 (대화 컨텍스트 유지)
+          // 에러 응답을 assistant로 기록해서 role 교대 유지
+          const errorMsg = innerError instanceof Error ? innerError.message : String(innerError);
+          
+          let userErrorMsg: string;
+          if (errorMsg.includes("rate limit") || errorMsg.includes("429")) {
+            userErrorMsg = "지금 요청이 많아서 사진을 분석할 수 없어. 잠시 후 다시 보내줄래?";
+          } else if (errorMsg.includes("timeout")) {
+            userErrorMsg = "사진 분석이 너무 오래 걸렸어. 다시 보내줄래?";
+          } else {
+            userErrorMsg = "사진을 분석하다가 문제가 생겼어. 다시 보내줄래?";
+          }
+          
+          history.push({ role: "assistant", content: `[응답 실패] ${userErrorMsg}` });
+          
+          recordError();
+          console.error(`[Photo] chatId=${chatId} error:`, errorMsg);
+          await ctx.reply(userErrorMsg);
+          return;
         }
       } catch (error) {
+        // 이미지 다운로드 등 history.push() 전 에러는 그냥 응답만
         recordError();
         
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(`[Photo] chatId=${chatId} error:`, errorMsg);
         
-        // 사용자 친화적 에러 메시지
         if (errorMsg.includes("rate limit") || errorMsg.includes("429")) {
           await ctx.reply("지금 요청이 많아서 사진을 분석할 수 없어. 잠시 후 다시 보내줄래?");
         } else if (errorMsg.includes("timeout")) {
@@ -285,24 +301,29 @@ export function registerMessageHandlers(bot: Bot): void {
         // 자동 compaction 체크
         await autoCompactIfNeeded(ctx, history);
       } catch (error) {
-        // 에러 시 방금 추가한 사용자 메시지 롤백 (히스토리 오염 방지)
-        history.pop();
         recordError();
         
         // 구체적인 에러 로깅
         const errorMsg = error instanceof Error ? error.message : String(error);
         console.error(`[Chat] chatId=${chatId} error:`, errorMsg);
         
-        // 사용자 친화적 에러 메시지
+        // 에러 응답을 assistant로 기록 (사용자 메시지 보존 + role 교대 유지)
+        // 이렇게 하면 에러 발생해도 대화 컨텍스트 유지됨
+        let userErrorMsg: string;
         if (errorMsg.includes("rate limit") || errorMsg.includes("429")) {
-          await ctx.reply("지금 요청이 많아서 잠깐 쉬어야 해. 30초 후에 다시 시도해줄래?");
+          userErrorMsg = "지금 요청이 많아서 잠깐 쉬어야 해. 30초 후에 다시 시도해줄래?";
         } else if (errorMsg.includes("timeout") || errorMsg.includes("ETIMEDOUT")) {
-          await ctx.reply("응답이 너무 오래 걸려서 중단됐어. 다시 시도해줄래?");
+          userErrorMsg = "응답이 너무 오래 걸려서 중단됐어. 다시 시도해줄래?";
         } else if (errorMsg.includes("context_length") || errorMsg.includes("too many tokens") || errorMsg.includes("maximum context")) {
-          await ctx.reply("대화가 너무 길어졌어. /compact 로 정리하고 다시 시도해줘!");
+          userErrorMsg = "대화가 너무 길어졌어. /compact 로 정리하고 다시 시도해줘!";
         } else {
-          await ctx.reply(`문제가 생겼어: ${errorMsg.slice(0, 100)}`);
+          userErrorMsg = `문제가 생겼어: ${errorMsg.slice(0, 100)}`;
         }
+        
+        // 에러 메시지를 assistant 응답으로 기록 (히스토리 컨텍스트 유지)
+        history.push({ role: "assistant", content: `[응답 실패] ${userErrorMsg}` });
+        
+        await ctx.reply(userErrorMsg);
       }
     });
   });

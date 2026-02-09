@@ -1,6 +1,6 @@
 {
   "name": "companionbot",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "AI 친구 텔레그램 봇 - Claude API 기반 개인화된 대화 상대",
   "keywords": [
     "telegram",
