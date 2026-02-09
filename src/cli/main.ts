@@ -25,6 +25,12 @@ async function question(rl: readline.Interface, prompt: string): Promise<string>
   });
 }
 
+interface FeatureSelection {
+  webSearch: boolean;
+  calendar: boolean;
+  weather: boolean;
+}
+
 async function interactiveSetup(): Promise<boolean> {
   const rl = createPrompt();
 
@@ -35,101 +41,183 @@ async function interactiveSetup(): Promise<boolean> {
 
 CompanionBot은 Telegram에서 동작하는 개인 AI 비서예요.
 
-┌─────────────────────────────────────────────────────────────┐
-│  ✨ 이런 것들을 할 수 있어요:                               │
-├─────────────────────────────────────────────────────────────┤
-│  💬 자연스러운 대화      AI와 한국어로 자유롭게 대화       │
-│  📁 파일 읽기/쓰기       문서 작성, 코드 편집 가능         │
-│  🔍 웹 검색              최신 정보 검색 (Brave API)        │
-│  📅 캘린더 연동          일정 확인/추가 (Google Calendar)  │
-│  ⏰ 리마인더             알림 설정 ("3시에 알려줘")        │
-│  🧠 메모리 기능          대화 내용 기억, 장기 기억 저장    │
-│  📰 브리핑               매일 아침 날씨/일정/뉴스 요약     │
-└─────────────────────────────────────────────────────────────┘
-
-필수 설정 2개 + 선택 설정으로 시작합니다.
-
 💡 언제든지 'q'를 입력하면 설정을 취소할 수 있어요.
 `);
 
   try {
-    // Telegram Bot Token
+    // ===== STEP 1: 기능 선택 =====
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[1/2] Telegram Bot Token
+[STEP 1] 사용할 기능 선택
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📱 Telegram에서 봇을 만들어야 해요:
+사용할 기능을 선택하세요. 선택한 기능에 필요한 API만 설정합니다.
 
-   1. Telegram에서 @BotFather 검색해서 대화 시작
-   2. /newbot 명령어 입력
-   3. 봇 이름 입력 (예: My AI Assistant)
-   4. 봇 유저네임 입력 (예: my_ai_bot) - 반드시 _bot으로 끝나야 함
-   5. 토큰이 나오면 복사! (예: 123456:ABC-DEF...)
-
-   🔗 바로가기: https://t.me/BotFather
+┌──────────────────────────────────────────────────────────────┐
+│  [필수] 기본 기능 (자동 포함)                                │
+│  ├─ 💬 AI 대화         자연스러운 한국어 대화               │
+│  ├─ 📁 파일 관리       문서/코드 읽기·쓰기                  │
+│  ├─ ⏰ 리마인더        알림 설정 ("3시에 알려줘")           │
+│  └─ 🧠 메모리          대화 기억, 장기 기억 저장            │
+└──────────────────────────────────────────────────────────────┘
 `);
 
-    const token = await question(rl, "   Token을 붙여넣으세요 (q=취소): ");
-    if (!token || token.toLowerCase() === "q") {
-      console.log("\n👋 설정을 취소했습니다. 나중에 다시 실행하세요.");
+    const features: FeatureSelection = {
+      webSearch: false,
+      calendar: false,
+      weather: false,
+    };
+
+    // 웹 검색
+    console.log("   🔍 웹 검색 - 최신 정보 검색 (Brave API 필요, 무료 2000회/월)");
+    const useWebSearch = await question(rl, "      사용하시겠습니까? (y/n, q=취소): ");
+    if (useWebSearch.toLowerCase() === "q") {
+      console.log("\n👋 설정을 취소했습니다.");
       rl.close();
       return false;
     }
+    features.webSearch = useWebSearch.toLowerCase() === "y";
+    console.log(features.webSearch ? "      → 선택됨 ✓\n" : "      → 건너뜀\n");
 
+    // 캘린더
+    console.log("   📅 캘린더 연동 - Google Calendar 일정 확인/추가");
+    const useCalendar = await question(rl, "      사용하시겠습니까? (y/n, q=취소): ");
+    if (useCalendar.toLowerCase() === "q") {
+      console.log("\n👋 설정을 취소했습니다.");
+      rl.close();
+      return false;
+    }
+    features.calendar = useCalendar.toLowerCase() === "y";
+    console.log(features.calendar ? "      → 선택됨 ✓\n" : "      → 건너뜀\n");
+
+    // 날씨
+    console.log("   🌤️  날씨 - 현재 날씨, 브리핑 (OpenWeatherMap API 필요, 무료)");
+    const useWeather = await question(rl, "      사용하시겠습니까? (y/n, q=취소): ");
+    if (useWeather.toLowerCase() === "q") {
+      console.log("\n👋 설정을 취소했습니다.");
+      rl.close();
+      return false;
+    }
+    features.weather = useWeather.toLowerCase() === "y";
+    console.log(features.weather ? "      → 선택됨 ✓\n" : "      → 건너뜀\n");
+
+    // 선택 요약
+    const selectedFeatures = [];
+    if (features.webSearch) selectedFeatures.push("웹 검색");
+    if (features.calendar) selectedFeatures.push("캘린더");
+    if (features.weather) selectedFeatures.push("날씨");
+
+    console.log(`┌──────────────────────────────────────────────────────────────┐
+│  선택된 기능: 기본 + ${selectedFeatures.length > 0 ? selectedFeatures.join(", ") : "(추가 기능 없음)"}
+└──────────────────────────────────────────────────────────────┘
+`);
+
+    // ===== STEP 2: 필수 API 키 =====
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[STEP 2] 필수 API 키 입력
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`);
+
+    // Telegram Bot Token
+    console.log(`   📱 Telegram Bot Token
+   
+      1. Telegram에서 @BotFather 검색
+      2. /newbot → 이름 입력 → 유저네임 입력 (_bot으로 끝나야 함)
+      3. 토큰 복사 (예: 123456:ABC-DEF...)
+      🔗 https://t.me/BotFather
+`);
+    const token = await question(rl, "      Token: ");
+    if (!token || token.toLowerCase() === "q") {
+      console.log("\n👋 설정을 취소했습니다.");
+      rl.close();
+      return false;
+    }
     await setSecret("telegram-token", token);
-    console.log("   ✓ 저장됨 (OS 키체인에 안전하게 보관)\n");
+    console.log("      ✓ 저장됨\n");
 
     // Anthropic API Key
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[2/2] Anthropic API Key
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🧠 AI 기능을 위해 Anthropic API 키가 필요해요:
-
-   1. https://console.anthropic.com 접속
-   2. 회원가입 또는 로그인
-   3. Settings > API Keys 메뉴
-   4. Create Key 버튼 클릭
-   5. 생성된 키 복사! (sk-ant-...)
-
-   💡 무료 크레딧이 있으니 먼저 사용해보세요!
-   🔗 바로가기: https://console.anthropic.com/settings/keys
+    console.log(`   🧠 Anthropic API Key
+   
+      1. https://console.anthropic.com 접속 (회원가입/로그인)
+      2. Settings > API Keys > Create Key
+      3. 키 복사 (sk-ant-...)
+      🔗 https://console.anthropic.com/settings/keys
 `);
-
-    const apiKey = await question(rl, "   API Key를 붙여넣으세요 (q=취소): ");
+    const apiKey = await question(rl, "      API Key: ");
     if (!apiKey || apiKey.toLowerCase() === "q") {
-      console.log("\n👋 설정을 취소했습니다. 나중에 다시 실행하세요.");
-      console.log("   (Telegram 토큰은 이미 저장됨)");
+      console.log("\n👋 설정을 취소했습니다. (Telegram 토큰은 저장됨)");
       rl.close();
       return false;
     }
-
     await setSecret("anthropic-api-key", apiKey);
-    console.log("   ✓ 저장됨 (OS 키체인에 안전하게 보관)\n");
+    console.log("      ✓ 저장됨\n");
 
-    // 선택적 기능 설정
-    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[선택] 추가 기능
+    // ===== STEP 3: 선택 API 키 =====
+    if (features.webSearch || features.calendar || features.weather) {
+      console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[STEP 3] 선택한 기능 API 키 입력
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-`);
-    const setupOptional = await question(rl, "   웹 검색 기능을 설정하시겠습니까? (y/n): ");
 
-    if (setupOptional.toLowerCase() === "y") {
-      console.log(`
-   🔍 Brave Search API (무료 2000회/월):
+Enter를 누르면 해당 기능을 건너뛸 수 있어요.
+`);
+
+      // 웹 검색 API
+      if (features.webSearch) {
+        console.log(`   🔍 Brave Search API (무료 2000회/월)
    
       1. https://brave.com/search/api 접속
-      2. Get Started 클릭 후 가입
-      3. API 키 생성
+      2. Get Started > 가입 > API 키 생성
 `);
-      const braveKey = await question(rl, "   Brave API Key (Enter로 건너뛰기): ");
-      if (braveKey) {
-        await setSecret("brave-api-key", braveKey);
-        console.log("   ✓ 저장됨\n");
-      } else {
-        console.log("   → 건너뜀 (나중에 companionbot setup brave <KEY>로 설정 가능)\n");
+        const braveKey = await question(rl, "      API Key (Enter=건너뛰기, q=취소): ");
+        if (braveKey.toLowerCase() === "q") {
+          console.log("\n👋 설정을 취소했습니다.");
+          rl.close();
+          return false;
+        }
+        if (braveKey) {
+          await setSecret("brave-api-key", braveKey);
+          console.log("      ✓ 저장됨\n");
+        } else {
+          console.log("      → 건너뜀 (나중에: companionbot setup brave <KEY>)\n");
+        }
+      }
+
+      // 날씨 API
+      if (features.weather) {
+        console.log(`   🌤️  OpenWeatherMap API (무료)
+   
+      1. https://openweathermap.org 접속 > Sign Up
+      2. API Keys 메뉴에서 키 확인/생성
+`);
+        const weatherKey = await question(rl, "      API Key (Enter=건너뛰기, q=취소): ");
+        if (weatherKey.toLowerCase() === "q") {
+          console.log("\n👋 설정을 취소했습니다.");
+          rl.close();
+          return false;
+        }
+        if (weatherKey) {
+          await setSecret("openweathermap-api-key", weatherKey);
+          console.log("      ✓ 저장됨\n");
+        } else {
+          console.log("      → 건너뜀 (나중에: companionbot setup weather <KEY>)\n");
+        }
+      }
+
+      // 캘린더
+      if (features.calendar) {
+        console.log(`   📅 Google Calendar
+   
+      캘린더는 봇 실행 후 /calendar_setup 명령어로 설정합니다.
+      (OAuth 인증이 필요해서 브라우저가 열려요)
+`);
+        await question(rl, "      Enter를 눌러 계속...");
+        console.log("");
       }
     }
+
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ 설정 완료!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`);
 
     rl.close();
     return true;
