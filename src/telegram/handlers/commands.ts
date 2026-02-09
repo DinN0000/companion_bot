@@ -104,6 +104,35 @@ import {
 import { ensureDefaultCronJobs } from "../../cron/scheduler.js";
 
 export function registerCommands(bot: Bot): void {
+  // /help 명령어 - 전체 기능 안내
+  bot.command("help", async (ctx) => {
+    await ctx.reply(
+      `📖 도움말\n\n` +
+      `🎯 기본 기능\n` +
+      `/model - AI 모델 변경 (sonnet/opus/haiku)\n` +
+      `/compact - 대화 압축해서 토큰 절약\n` +
+      `/clear - 대화 초기화\n\n` +
+      `📌 기억/핀\n` +
+      `/memory - 최근 기억 보기\n` +
+      `/pin [내용] - 중요한 정보 핀하기\n` +
+      `/pins - 핀 목록 보기\n` +
+      `/context - 현재 맥락 상태\n\n` +
+      `⏰ 알림/일정\n` +
+      `/reminders - 알림 목록\n` +
+      `/briefing - 일일 브리핑 켜기/상태\n` +
+      `/calendar - 오늘 일정 보기\n\n` +
+      `⚙️ 설정\n` +
+      `/setup - 기능별 설정 관리\n` +
+      `/health - 봇 상태 확인\n` +
+      `/reset - 페르소나 초기화\n\n` +
+      `💡 자연어로도 말할 수 있어요:\n` +
+      `• "opus로 바꿔줘"\n` +
+      `• "10분 뒤에 알려줘"\n` +
+      `• "기억해: 나는 채식주의자야"\n` +
+      `• "내일 일정 뭐야?"`
+    );
+  });
+
   // /start 명령어
   bot.command("start", async (ctx) => {
     const chatId = ctx.chat.id;
@@ -294,9 +323,9 @@ export function registerCommands(bot: Bot): void {
         .join("\n");
 
       await ctx.reply(
-        `Current model: ${MODELS[currentModel].name}\n\n` +
-        `Available models:\n${modelList}\n\n` +
-        `Tip: You can also ask me to change models in natural language!`
+        `현재 모델: ${MODELS[currentModel].name}\n\n` +
+        `사용 가능한 모델:\n${modelList}\n\n` +
+        `팁: "모델 바꿔줘"처럼 자연어로도 바꿀 수 있어!`
       );
       return;
     }
@@ -304,11 +333,11 @@ export function registerCommands(bot: Bot): void {
     if (arg in MODELS) {
       const modelId = arg as ModelId;
       setModel(chatId, modelId);
-      await ctx.reply(`Model changed to: ${MODELS[modelId].name}`);
+      await ctx.reply(`모델 변경됨: ${MODELS[modelId].name}`);
     } else {
       await ctx.reply(
-        `Unknown model: ${arg}\n\n` +
-        `Available: sonnet, opus, haiku`
+        `모르는 모델이야: ${arg}\n\n` +
+        `사용 가능: sonnet, opus, haiku`
       );
     }
   });

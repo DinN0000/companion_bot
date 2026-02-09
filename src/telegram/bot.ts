@@ -84,9 +84,11 @@ export function createBot(token: string): Bot {
   // 명령어 목록 등록
   bot.api
     .setMyCommands([
+      { command: "help", description: "도움말 보기" },
+      { command: "model", description: "AI 모델 변경" },
       { command: "compact", description: "대화 정리하기" },
       { command: "memory", description: "최근 기억 보기" },
-      { command: "reminders", description: "알림 목록 보기" },
+      { command: "health", description: "봇 상태 확인" },
     ])
     .catch((err) => console.error("Failed to set commands:", err));
 

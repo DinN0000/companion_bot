@@ -12,6 +12,12 @@ import { randomUUID } from "crypto";
 import type { Bot } from "grammy";
 import { Agent, AgentStatus, AgentResult } from "./types.js";
 
+// ===== 제한 상수 =====
+const MAX_CONCURRENT_AGENTS = 10;        // 전체 동시 Agent 최대 개수
+const MAX_AGENTS_PER_CHAT = 3;           // chatId당 최대 동시 Agent 개수
+const CLEANUP_INTERVAL_MS = 30 * 60 * 1000;  // 30분마다 cleanup
+const AGENT_TTL_MS = 30 * 60 * 1000;     // Agent 보관 시간 (30분)
+
 // Agent 저장소
 const agents = new Map<string, Agent>();
 
@@ -39,12 +45,58 @@ export function setAgentBot(bot: Bot): void {
 }
 
 /**
+ * 가장 오래된 Agent 정리 (한도 초과 시)
+ */
+function evictOldestAgent(): void {
+  let oldest: Agent | null = null;
+  
+  for (const agent of agents.values()) {
+    if (!oldest || agent.createdAt < oldest.createdAt) {
+      oldest = agent;
+    }
+  }
+  
+  if (oldest) {
+    console.log(`[AgentManager] Evicting oldest agent: ${oldest.id}`);
+    // running이면 취소
+    if (oldest.status === "running") {
+      cancelAgent(oldest.id);
+    }
+    agents.delete(oldest.id);
+  }
+}
+
+/**
+ * chatId당 Agent 개수 확인
+ */
+function countAgentsForChat(chatId: number): number {
+  let count = 0;
+  for (const agent of agents.values()) {
+    if (agent.chatId === chatId && agent.status === "running") {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
  * Sub-agent 생성 및 실행
  */
 export async function spawnAgent(
   task: string,
   chatId: number
 ): Promise<string> {
+  // chatId당 제한 확인
+  const chatAgentCount = countAgentsForChat(chatId);
+  if (chatAgentCount >= MAX_AGENTS_PER_CHAT) {
+    throw new Error(`이 채팅에서 동시에 실행 가능한 Agent 수(${MAX_AGENTS_PER_CHAT}개)를 초과했습니다. 기존 Agent 완료를 기다려주세요.`);
+  }
+  
+  // 전체 한도 확인 및 정리
+  while (agents.size >= MAX_CONCURRENT_AGENTS) {
+    evictOldestAgent();
+  }
+  
   const id = randomUUID().slice(0, 8);
   
   const agent: Agent = {
@@ -56,6 +108,7 @@ export async function spawnAgent(
   };
   
   agents.set(id, agent);
+  console.log(`[AgentManager] Agent created: ${id} (total: ${agents.size}/${MAX_CONCURRENT_AGENTS})`);
   
   // 비동기로 agent 실행 (await 하지 않음)
   runAgent(agent).catch((err) => {
@@ -230,25 +283,38 @@ export function getAgent(agentId: string): Agent | undefined {
 }
 
 /**
- * 오래된 agent 정리 (1시간 이상)
- * - 완료된 agent: completedAt 기준 1시간
- * - running 상태도 createdAt 기준 1시간 지나면 정리 (stuck 방지)
+ * 오래된 agent 정리 (30분 이상)
+ * - 완료된 agent: completedAt 기준 30분
+ * - running 상태도 createdAt 기준 30분 지나면 정리 (stuck 방지)
  */
 export function cleanupOldAgents(): void {
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const cutoff = Date.now() - AGENT_TTL_MS;
+  let cleaned = 0;
   
   for (const [id, agent] of agents.entries()) {
     // 완료된 agent: completedAt 기준
-    if (agent.completedAt && agent.completedAt.getTime() < oneHourAgo) {
+    if (agent.completedAt && agent.completedAt.getTime() < cutoff) {
       agents.delete(id);
+      cleaned++;
       continue;
     }
     
-    // running 상태도 1시간 지나면 정리 (stuck agent 방지)
-    if (agent.status === "running" && agent.createdAt.getTime() < oneHourAgo) {
-      console.log(`[Agent ${id}] Cleaning up stuck agent (running > 1h)`);
+    // running 상태도 TTL 지나면 정리 (stuck agent 방지)
+    if (agent.status === "running" && agent.createdAt.getTime() < cutoff) {
+      console.log(`[Agent ${id}] Cleaning up stuck agent (running > 30min)`);
+      // 실행 중인 API 호출 취소
+      const controller = abortControllers.get(id);
+      if (controller) {
+        controller.abort();
+        abortControllers.delete(id);
+      }
       agents.delete(id);
+      cleaned++;
     }
+  }
+  
+  if (cleaned > 0) {
+    console.log(`[AgentManager] Cleanup: removed ${cleaned} agents (remaining: ${agents.size})`);
   }
 }
 
@@ -256,12 +322,12 @@ export function cleanupOldAgents(): void {
 let cleanupIntervalId: ReturnType<typeof setInterval> | null = null;
 
 /**
- * 정기 cleanup 시작
+ * 정기 cleanup 시작 (30분 주기)
  */
 export function startCleanup(): void {
   if (cleanupIntervalId) return; // 이미 실행 중
-  cleanupIntervalId = setInterval(cleanupOldAgents, 10 * 60 * 1000);
-  console.log("[AgentManager] Cleanup interval started");
+  cleanupIntervalId = setInterval(cleanupOldAgents, CLEANUP_INTERVAL_MS);
+  console.log(`[AgentManager] Cleanup interval started (every ${CLEANUP_INTERVAL_MS / 60000}min)`);
 }
 
 /**

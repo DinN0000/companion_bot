@@ -1,260 +1,65 @@
-import * as fs from "fs/promises";
-import * as fsSync from "fs";
+/**
+ * Tools module - exports and routing
+ * 
+ * 도메인별로 분할된 모듈에서 기능을 가져와 라우팅
+ */
+
 import * as path from "path";
-import { exec, spawn, ChildProcess } from "child_process";
-import { promisify } from "util";
-import { randomUUID } from "crypto";
 import { MODELS, type ModelId } from "../ai/claude.js";
-import { getCurrentChatId, setModel, getModel } from "../session/state.js";
+import { getWorkspacePath } from "../workspace/index.js";
+
+// 분할된 모듈에서 import
+import { home } from "./utils.js";
 import {
-  SESSION_MAX_OUTPUT_LINES,
-  SESSION_CLEANUP_INTERVAL_MS,
-  SESSION_TTL_MS,
-  COMMAND_TIMEOUT_SECONDS,
-  TOOL_RESULT_MAX_LENGTH,
-  WEB_FETCH_MAX_CHARS,
-  DEFAULT_SEARCH_RESULTS,
-  MAX_SEARCH_RESULTS,
-  DEFAULT_MEMORY_SEARCH_LIMIT,
-  DEFAULT_MEMORY_MIN_SCORE,
-} from "../utils/constants.js";
-// Note: getCurrentChatId uses AsyncLocalStorage - must be called within runWithChatId context
+  executeRunCommand,
+  executeListSessions,
+  executeGetSessionLog,
+  executeKillSession,
+} from "./session.js";
 import {
-  getWorkspacePath,
-  saveWorkspaceFile,
-  appendToMemory,
-  deleteBootstrap,
-} from "../workspace/index.js";
-import { getSecret } from "../config/secrets.js";
+  executeReadFile,
+  executeWriteFile,
+  executeEditFile,
+  executeListDirectory,
+} from "./file.js";
 import {
-  createReminder,
-  deleteReminder,
-  getReminders,
-  parseTimeExpression,
-} from "../reminders/index.js";
+  executeWebSearch,
+  executeWebFetch,
+} from "./web.js";
 import {
-  isCalendarConfigured,
-  getTodayEvents,
-  getEvents,
-  addEvent,
-  deleteEvent,
-  formatEvent,
-  parseDateExpression,
-} from "../calendar/index.js";
+  executeSetReminder,
+  executeListReminders,
+  executeCancelReminder,
+  executeGetCalendarEvents,
+  executeAddCalendarEvent,
+  executeDeleteCalendarEvent,
+  executeControlHeartbeat,
+  executeRunHeartbeatCheck,
+  executeControlBriefing,
+  executeSendBriefingNow,
+  executeAddCron,
+  executeListCrons,
+  executeRemoveCron,
+  executeToggleCron,
+  executeRunCron,
+} from "./schedule.js";
 import {
-  setHeartbeatConfig,
-  getHeartbeatConfig,
-  disableHeartbeat,
-  runHeartbeatNow,
-} from "../heartbeat/index.js";
+  executeSaveMemory,
+  executeSavePersona,
+  executeMemorySearch,
+  executeMemoryReindex,
+} from "./memory.js";
+import { executeGetWeather } from "./weather.js";
 import {
-  setBriefingConfig,
-  getBriefingConfig,
-  disableBriefing,
-  sendBriefingNow,
-} from "../briefing/index.js";
-import {
-  spawnAgent,
-  listAgents,
-  cancelAgent,
-} from "../agents/index.js";
-import {
-  addCronJob,
-  listCronJobs,
-  removeCronJob,
-  setCronJobEnabled,
-  runCronJobNow,
-  parseScheduleExpression,
-  ensureDefaultCronJobs,
-} from "../cron/index.js";
-import * as cheerio from "cheerio";
-import { embed } from '../memory/embeddings.js';
-import { search } from '../memory/vectorStore.js';
-import { reindexAll } from '../memory/indexer.js';
+  executeSpawnAgent,
+  executeListAgents,
+  executeCancelAgent,
+} from "./agent.js";
+import { executeChangeModel } from "./model.js";
 
-const execAsync = promisify(exec);
-
-// ============== 세션 관리 ==============
-interface ProcessSession {
-  id: string;
-  pid: number;
-  command: string;
-  cwd: string;
-  startTime: Date;
-  endTime?: Date;
-  exitCode?: number | null;
-  outputBuffer: string[];
-  process: ChildProcess;
-  status: "running" | "completed" | "killed" | "error";
-}
-
-// 메모리에 세션 저장
-const sessions = new Map<string, ProcessSession>();
-
-// 완료된 세션 자동 정리 함수
-function cleanupStaleSessions(): void {
-  const now = Date.now();
-  for (const [id, session] of sessions) {
-    // 완료/에러/종료된 세션만 정리
-    if (session.status !== "running" && session.endTime) {
-      const age = now - session.endTime.getTime();
-      if (age > SESSION_TTL_MS) {
-        sessions.delete(id);
-      }
-    }
-  }
-}
-
-// 주기적 세션 정리 시작
-setInterval(cleanupStaleSessions, SESSION_CLEANUP_INTERVAL_MS);
-
-function appendOutput(session: ProcessSession, data: string) {
-  const lines = data.split("\n");
-  session.outputBuffer.push(...lines);
-  // 버퍼 크기 제한
-  if (session.outputBuffer.length > SESSION_MAX_OUTPUT_LINES) {
-    session.outputBuffer = session.outputBuffer.slice(-SESSION_MAX_OUTPUT_LINES);
-  }
-}
-
-// 홈 디렉토리
-const home = process.env.HOME || "";
-
-// 허용된 디렉토리 설정 (캐시됨 - 환경변수는 런타임 중 변경되지 않음)
-// - COMPANIONBOT_FULL_ACCESS=true: 홈 디렉토리 전체 접근 (위험한 파일 패턴은 여전히 차단)
-// - COMPANIONBOT_ALLOWED_PATHS: 콜론(:)으로 구분된 추가 경로 (예: /tmp:/var/data)
-// - 기본값: ~/Documents, ~/projects, 워크스페이스
-let _cachedAllowedPaths: string[] | null = null;
-
-function getAllowedPaths(): string[] {
-  if (_cachedAllowedPaths) {
-    return _cachedAllowedPaths;
-  }
-  
-  // 전체 접근 모드
-  if (process.env.COMPANIONBOT_FULL_ACCESS === "true") {
-    _cachedAllowedPaths = [home];
-    return _cachedAllowedPaths;
-  }
-  
-  // 기본 경로
-  const paths = [
-    path.join(home, "Documents"),
-    path.join(home, "projects"),
-    getWorkspacePath(),
-  ];
-  
-  // 환경변수로 추가 경로 설정
-  const extraPaths = process.env.COMPANIONBOT_ALLOWED_PATHS;
-  if (extraPaths) {
-    const extras = extraPaths.split(":").filter(p => p.trim());
-    for (const p of extras) {
-      // ~ 확장
-      const expanded = p.startsWith("~") ? path.join(home, p.slice(1)) : p;
-      paths.push(expanded);
-    }
-  }
-  
-  _cachedAllowedPaths = paths;
-  return _cachedAllowedPaths;
-}
-
-// 위험한 파일 패턴
-// SSRF 방지: 사설 IP 체크
-function isPrivateIP(hostname: string): boolean {
-  // IPv4 사설 IP 패턴
-  const privateIPv4Patterns = [
-    /^127\./,                           // 127.0.0.0/8 loopback
-    /^10\./,                            // 10.0.0.0/8
-    /^172\.(1[6-9]|2[0-9]|3[0-1])\./,  // 172.16.0.0/12
-    /^192\.168\./,                      // 192.168.0.0/16
-    /^0\./,                             // 0.0.0.0/8
-    /^169\.254\./,                      // link-local
-  ];
-  
-  // IPv6 사설/특수 주소
-  const privateIPv6Patterns = [
-    /^::1$/,                            // loopback
-    /^fe80:/i,                          // link-local
-    /^fd[0-9a-f]{2}:/i,                // unique local (fd00::/8)
-    /^fc[0-9a-f]{2}:/i,                // unique local (fc00::/7)
-    /^::ffff:(127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/i,  // IPv4-mapped
-  ];
-  
-  // localhost 체크
-  if (hostname === 'localhost' || hostname === 'localhost.localdomain') {
-    return true;
-  }
-  
-  // IPv4 체크
-  if (privateIPv4Patterns.some(p => p.test(hostname))) {
-    return true;
-  }
-  
-  // IPv6 체크 (브라켓 제거)
-  const ipv6 = hostname.replace(/^\[|\]$/g, '');
-  if (privateIPv6Patterns.some(p => p.test(ipv6))) {
-    return true;
-  }
-  
-  return false;
-}
-
-const DANGEROUS_PATTERNS = [
-  /\.bashrc$/,
-  /\.zshrc$/,
-  /\.bash_profile$/,
-  /\.profile$/,
-  /\.ssh\//,
-  /\.git\/hooks\//,
-  /\.git\/config$/,
-  /\.env$/,
-  /\.npmrc$/,
-];
-
-function isPathAllowed(targetPath: string): boolean {
-  // ⚠️ TOCTOU (Time-of-check to time-of-use) 주의:
-  // realpathSync() 호출과 실제 파일 작업 사이에 심볼릭 링크가 변경될 수 있음.
-  // 완전한 방지를 위해서는 O_NOFOLLOW 플래그로 파일을 열어야 하지만,
-  // Node.js fs API에서는 제한적으로만 지원됨 (fs.open의 O_NOFOLLOW 미지원).
-  // 현재 구현은 기본적인 심볼릭 링크 해석을 통한 검증만 수행.
-  // 높은 보안이 필요한 환경에서는 chroot/namespace 격리를 권장.
-  try {
-    const resolved = path.resolve(targetPath);
-
-    // 위험한 파일 패턴 차단
-    if (DANGEROUS_PATTERNS.some(p => p.test(resolved))) {
-      return false;
-    }
-
-    // 심볼릭 링크 해제하여 실제 경로 확인
-    let realPath: string;
-    try {
-      realPath = fsSync.realpathSync(resolved);
-    } catch {
-      // 파일이 아직 없으면 (write_file) 부모 디렉토리 확인
-      const parentDir = path.dirname(resolved);
-      try {
-        realPath = path.join(fsSync.realpathSync(parentDir), path.basename(resolved));
-      } catch {
-        // 부모 디렉토리도 resolve 실패 시 거부 (존재하지 않거나 접근 불가)
-        return false;
-      }
-    }
-
-    const allowedPaths = getAllowedPaths();
-
-    // 정확한 경로 구분자로 비교 (startsWith만으로는 ~/DocumentsEvil 같은 경로 통과)
-    return allowedPaths.some((allowed) => {
-      const normalizedAllowed = path.resolve(allowed);
-      return realPath === normalizedAllowed ||
-             realPath.startsWith(normalizedAllowed + path.sep);
-    });
-  } catch {
-    // 어떤 예외든 검증 실패로 처리 (fail-safe)
-    return false;
-  }
-}
+// Re-export utilities for external use
+export { isPathAllowed, getAllowedPaths, DANGEROUS_PATTERNS } from "./pathCheck.js";
+export { isPrivateIP, home } from "./utils.js";
 
 // Tool 정의 (Claude API 형식)
 export const tools = [
@@ -926,953 +731,104 @@ Examples:
   },
 ];
 
-// Tool 실행 함수
+// Tool 실행 함수 - 각 모듈로 라우팅
 export async function executeTool(
   name: string,
   input: Record<string, unknown>
 ): Promise<string> {
   try {
     switch (name) {
-      case "read_file": {
-        const filePath = input.path as string;
-        if (!isPathAllowed(filePath)) {
-          return `Error: Access denied. Path not in allowed directories.`;
-        }
-        const content = await fs.readFile(filePath, "utf-8");
-        return content;
-      }
-
-      case "write_file": {
-        const filePath = input.path as string;
-        const content = input.content as string;
-        if (!isPathAllowed(filePath)) {
-          return `Error: Access denied. Path not in allowed directories.`;
-        }
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, content, "utf-8");
-        return `File written successfully: ${filePath}`;
-      }
-
-      case "edit_file": {
-        const filePath = input.path as string;
-        const oldText = input.oldText as string;
-        const newText = input.newText as string;
-
-        if (!isPathAllowed(filePath)) {
-          return `Error: Access denied. Path not in allowed directories.`;
-        }
-
-        // 파일 읽기
-        let content: string;
-        try {
-          content = await fs.readFile(filePath, "utf-8");
-        } catch (error) {
-          return `Error: Could not read file "${filePath}". ${error instanceof Error ? error.message : String(error)}`;
-        }
-
-        // oldText 찾기
-        const index = content.indexOf(oldText);
-        if (index === -1) {
-          return `Error: oldText not found in file. Make sure the text matches exactly (including whitespace).`;
-        }
-
-        // 첫 번째만 교체
-        const newContent = content.slice(0, index) + newText + content.slice(index + oldText.length);
-
-        // 저장
-        await fs.writeFile(filePath, newContent, "utf-8");
-        return `File edited successfully: ${filePath}`;
-      }
-
-      case "list_directory": {
-        const dirPath = input.path as string;
-        if (!isPathAllowed(dirPath)) {
-          return `Error: Access denied. Path not in allowed directories.`;
-        }
-        const entries = await fs.readdir(dirPath, { withFileTypes: true });
-        const list = entries.map((e) =>
-          `${e.isDirectory() ? "📁" : "📄"} ${e.name}`
-        );
-        return list.join("\n");
-      }
-
-      case "run_command": {
-        const command = input.command as string;
-        const cwd = (input.cwd as string) || path.join(home, "Documents");
-        const background = (input.background as boolean) || false;
-        const timeout = ((input.timeout as number) || 30) * 1000;
-
-        // 화이트리스트 방식: 허용된 명령어만 실행
-        const ALLOWED_COMMANDS = [
-          "git", "npm", "npx", "node", "ls", "pwd", "cat", "head", "tail",
-          "grep", "find", "wc", "sort", "uniq", "diff", "echo", "date",
-          "which", "env", "printenv"
-        ];
-
-        // 명령어 체이닝/치환/리디렉션 차단 (;, &&, ||, |, `, $(), ${}, 개행, >, <)
-        if (/[;&|`\n\r]|\$\(|\$\{|>>|>|</.test(command)) {
-          return `Error: Command chaining, substitution, and redirection not allowed.`;
-        }
-
-        // 첫 번째 명령어 추출
-        const parts = command.trim().split(/\s+/);
-        const cmd = parts[0];
-
-        if (!ALLOWED_COMMANDS.includes(cmd)) {
-          return `Error: Command '${cmd}' not in allowed list. Allowed: ${ALLOWED_COMMANDS.join(", ")}`;
-        }
-
-        // 위험한 인자 차단
-        const dangerousArgs = ["--force", "-rf", "--hard", "--no-preserve-root"];
-        if (dangerousArgs.some(arg => parts.includes(arg))) {
-          return `Error: Dangerous argument detected.`;
-        }
-
-        // 환경 변수는 필요한 것만 화이트리스트로 전달 (민감 정보 노출 방지)
-        const safeEnv: Record<string, string> = {
-          PATH: process.env.PATH || "",
-          HOME: process.env.HOME || "",
-          USER: process.env.USER || "",
-          LANG: process.env.LANG || "en_US.UTF-8",
-          TERM: process.env.TERM || "xterm",
-        };
-
-        // Background 실행
-        if (background) {
-          const sessionId = randomUUID().slice(0, 8);
-          
-          const child = spawn("sh", ["-c", command], {
-            cwd,
-            env: safeEnv,
-            detached: true,
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-
-          const session: ProcessSession = {
-            id: sessionId,
-            pid: child.pid!,
-            command,
-            cwd,
-            startTime: new Date(),
-            outputBuffer: [],
-            process: child,
-            status: "running",
-          };
-
-          // stdout/stderr 캡처
-          child.stdout?.on("data", (data: Buffer) => {
-            appendOutput(session, data.toString());
-          });
-          child.stderr?.on("data", (data: Buffer) => {
-            appendOutput(session, `[stderr] ${data.toString()}`);
-          });
-
-          // 프로세스 종료 핸들링
-          child.on("close", (code) => {
-            session.endTime = new Date();
-            session.exitCode = code;
-            session.status = code === 0 ? "completed" : "error";
-          });
-
-          child.on("error", (err) => {
-            session.status = "error";
-            appendOutput(session, `[error] ${err.message}`);
-          });
-
-          // unref로 부모 프로세스와 분리
-          child.unref();
-
-          sessions.set(sessionId, session);
-
-          return `Background session started.
-Session ID: ${sessionId}
-PID: ${child.pid}
-Command: ${command}
-CWD: ${cwd}
-
-Use list_sessions to see all sessions, get_session_log to view output, kill_session to terminate.`;
-        }
-
-        // Foreground 실행 (기존 방식)
-        try {
-          const { stdout, stderr } = await execAsync(command, {
-            cwd,
-            timeout,
-            env: safeEnv,
-          });
-          return stdout || stderr || "Command executed (no output)";
-        } catch (error) {
-          return `Error: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      }
-
-      case "list_sessions": {
-        const statusFilter = (input.status as string) || "all";
-        
-        const sessionList: string[] = [];
-        
-        for (const [id, session] of sessions) {
-          // 상태 필터링
-          if (statusFilter !== "all") {
-            if (statusFilter === "running" && session.status !== "running") continue;
-            if (statusFilter === "completed" && session.status === "running") continue;
-          }
-
-          const runtime = session.endTime 
-            ? `${Math.round((session.endTime.getTime() - session.startTime.getTime()) / 1000)}s`
-            : `${Math.round((Date.now() - session.startTime.getTime()) / 1000)}s (running)`;
-
-          const status = session.status === "running" 
-            ? "🟢 running" 
-            : session.status === "completed" 
-              ? "✅ completed" 
-              : session.status === "killed"
-                ? "🔴 killed"
-                : "❌ error";
-
-          sessionList.push(`[${id}] ${status}
-  Command: ${session.command}
-  PID: ${session.pid}
-  Runtime: ${runtime}
-  Exit code: ${session.exitCode ?? "N/A"}`);
-        }
-
-        if (sessionList.length === 0) {
-          return `No sessions found${statusFilter !== "all" ? ` with status "${statusFilter}"` : ""}.`;
-        }
-
-        return `Sessions (${sessionList.length}):\n\n${sessionList.join("\n\n")}`;
-      }
-
-      case "get_session_log": {
-        const sessionId = input.session_id as string;
-        const tail = (input.tail as number) || 50;
-
-        const session = sessions.get(sessionId);
-        if (!session) {
-          return `Error: Session "${sessionId}" not found. Use list_sessions to see available sessions.`;
-        }
-
-        const lines = session.outputBuffer.slice(-tail);
-        
-        if (lines.length === 0) {
-          return `Session ${sessionId} has no output yet.
-Status: ${session.status}
-Command: ${session.command}`;
-        }
-
-        const header = `Session: ${sessionId} (${session.status})
-Command: ${session.command}
-Showing last ${lines.length} lines:
-${"─".repeat(40)}`;
-
-        return `${header}\n${lines.join("\n")}`;
-      }
-
-      case "kill_session": {
-        const sessionId = input.session_id as string;
-        const signal = (input.signal as NodeJS.Signals) || "SIGTERM";
-
-        const session = sessions.get(sessionId);
-        if (!session) {
-          return `Error: Session "${sessionId}" not found.`;
-        }
-
-        if (session.status !== "running") {
-          return `Session ${sessionId} is not running (status: ${session.status}).`;
-        }
-
-        try {
-          // Process group kill (negative PID)
-          process.kill(-session.pid, signal);
-          session.status = "killed";
-          session.endTime = new Date();
-          return `Session ${sessionId} (PID ${session.pid}) killed with ${signal}.`;
-        } catch (error) {
-          // 단일 프로세스 kill 시도
-          try {
-            session.process.kill(signal);
-            session.status = "killed";
-            session.endTime = new Date();
-            return `Session ${sessionId} killed with ${signal}.`;
-          } catch (e) {
-            return `Error killing session: ${error instanceof Error ? error.message : String(error)}`;
-          }
-        }
-      }
-
-      case "change_model": {
-        const modelId = input.model as ModelId;
-        const reason = input.reason as string || "";
-        const chatId = getCurrentChatId();
-
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        if (!(modelId in MODELS)) {
-          return `Error: Unknown model "${modelId}". Available: sonnet, opus, haiku`;
-        }
-
-        const oldModel = getModel(chatId);
-        setModel(chatId, modelId);
-
-        const newModel = MODELS[modelId];
-        return `Model changed: ${MODELS[oldModel].name} → ${newModel.name}${reason ? ` (${reason})` : ""}. The change will take effect from the next message.`;
-      }
-
-      case "save_memory": {
-        const content = input.content as string;
-        const category = (input.category as string) || "other";
-
-        await appendToMemory(`[${category}] ${content}`);
-        return `Memory saved: ${content.slice(0, 50)}...`;
-      }
-
-      case "save_persona": {
-        const identity = input.identity as string;
-        const soul = input.soul as string;
-        const user = input.user as string;
-
-        // 각 파일 저장
-        await saveWorkspaceFile("IDENTITY.md", identity);
-        await saveWorkspaceFile("SOUL.md", soul);
-        await saveWorkspaceFile("USER.md", user);
-
-        // BOOTSTRAP.md 삭제
-        await deleteBootstrap();
-
-        // 기본 cron jobs 설정 (매일 12시 메모리 저장 등)
-        const chatId = getCurrentChatId();
-        if (chatId) {
-          await ensureDefaultCronJobs(chatId);
-        }
-
-        return "Persona saved! BOOTSTRAP mode complete. I'm ready to chat with my new identity.";
-      }
-
-      case "get_weather": {
-        const city = input.city as string;
-        const country = input.country as string | undefined;
-
-        const apiKey = await getSecret("openweathermap-api-key");
-        if (!apiKey) {
-          return "Error: OpenWeatherMap API key not configured. Ask user to set it up with /weather_setup command.";
-        }
-
-        const query = country ? `${city},${country}` : city;
-        const url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(query)}&appid=${apiKey}&units=metric&lang=kr`;
-
-        try {
-          const response = await fetch(url);
-          const data = await response.json();
-
-          if (data.cod !== 200) {
-            return `Error: ${data.message || "City not found"}`;
-          }
-
-          const weather = {
-            city: data.name,
-            country: data.sys.country,
-            temp: Math.round(data.main.temp),
-            feels_like: Math.round(data.main.feels_like),
-            humidity: data.main.humidity,
-            description: data.weather[0].description,
-            wind: data.wind.speed,
-          };
-
-          return `Weather in ${weather.city}, ${weather.country}:
-- Condition: ${weather.description}
-- Temperature: ${weather.temp}°C (feels like ${weather.feels_like}°C)
-- Humidity: ${weather.humidity}%
-- Wind: ${weather.wind} m/s`;
-        } catch (error) {
-          return `Error fetching weather: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      }
-
-      case "set_reminder": {
-        const message = input.message as string;
-        const timeExpr = input.time_expr as string;
-        const chatId = getCurrentChatId();
-
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const scheduledTime = parseTimeExpression(timeExpr);
-        if (!scheduledTime) {
-          return `Error: Could not parse time expression "${timeExpr}". Try formats like "10분 후", "내일 9시", "오후 3시"`;
-        }
-
-        const reminder = await createReminder(chatId, message, scheduledTime);
-
-        const timeStr = scheduledTime.toLocaleString("ko-KR", {
-          month: "long",
-          day: "numeric",
-          hour: "numeric",
-          minute: "numeric",
-        });
-
-        return `Reminder set! I'll remind you "${message}" at ${timeStr}. (ID: ${reminder.id})`;
-      }
-
-      case "list_reminders": {
-        const chatId = getCurrentChatId();
-
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const reminders = await getReminders(chatId);
-
-        if (reminders.length === 0) {
-          return "No active reminders.";
-        }
-
-        const list = reminders.map((r) => {
-          const time = new Date(r.scheduledAt).toLocaleString("ko-KR", {
-            month: "long",
-            day: "numeric",
-            hour: "numeric",
-            minute: "numeric",
-          });
-          return `- [${r.id}] "${r.message}" at ${time}`;
-        });
-
-        return `Active reminders:\n${list.join("\n")}`;
-      }
-
-      case "cancel_reminder": {
-        const id = input.id as string;
-        const success = await deleteReminder(id);
-
-        if (success) {
-          return `Reminder ${id} cancelled.`;
-        } else {
-          return `Reminder ${id} not found.`;
-        }
-      }
-
-      case "get_calendar_events": {
-        const configured = await isCalendarConfigured();
-        if (!configured) {
-          return "Error: Google Calendar not configured. Ask user to set it up with /calendar_setup";
-        }
-
-        const dateRange = input.date_range as string;
-        const now = new Date();
-        let start: Date;
-        let end: Date;
-
-        switch (dateRange) {
-          case "today":
-            start = new Date(now);
-            start.setHours(0, 0, 0, 0);
-            end = new Date(now);
-            end.setHours(23, 59, 59, 999);
-            break;
-          case "tomorrow":
-            start = new Date(now);
-            start.setDate(start.getDate() + 1);
-            start.setHours(0, 0, 0, 0);
-            end = new Date(start);
-            end.setHours(23, 59, 59, 999);
-            break;
-          case "week":
-            start = new Date(now);
-            start.setHours(0, 0, 0, 0);
-            end = new Date(now);
-            end.setDate(end.getDate() + 7);
-            end.setHours(23, 59, 59, 999);
-            break;
-          default:
-            return "Error: Invalid date range";
-        }
-
-        const events = await getEvents(start, end);
-
-        if (events.length === 0) {
-          return `No events found for ${dateRange}.`;
-        }
-
-        const eventList = events.map((e) => {
-          const formatted = formatEvent(e);
-          return `- ${formatted} (ID: ${e.id})`;
-        });
-
-        const dateLabel = dateRange === "today" ? "오늘" : dateRange === "tomorrow" ? "내일" : "이번 주";
-        return `${dateLabel} 일정:\n${eventList.join("\n")}`;
-      }
-
-      case "add_calendar_event": {
-        const configured = await isCalendarConfigured();
-        if (!configured) {
-          return "Error: Google Calendar not configured. Ask user to set it up with /calendar_setup";
-        }
-
-        const title = input.title as string;
-        const timeExpr = input.time_expr as string;
-        const description = input.description as string | undefined;
-
-        const parsed = parseDateExpression(timeExpr);
-        if (!parsed) {
-          return `Error: Could not parse time "${timeExpr}". Try formats like "내일 오후 3시", "모레 오전 10시"`;
-        }
-
-        const event = await addEvent(title, parsed.start, parsed.end, description);
-
-        const timeStr = parsed.start.toLocaleString("ko-KR", {
-          month: "long",
-          day: "numeric",
-          hour: "numeric",
-          minute: "numeric",
-        });
-
-        return `Event created: "${title}" at ${timeStr}`;
-      }
-
-      case "delete_calendar_event": {
-        const configured = await isCalendarConfigured();
-        if (!configured) {
-          return "Error: Google Calendar not configured.";
-        }
-
-        const eventId = input.event_id as string;
-        const success = await deleteEvent(eventId);
-
-        if (success) {
-          return `Event deleted.`;
-        } else {
-          return `Event not found or could not be deleted.`;
-        }
-      }
-
-      case "control_heartbeat": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const action = input.action as string;
-        const intervalMinutes = (input.interval_minutes as number) || 30;
-
-        switch (action) {
-          case "on": {
-            const interval = Math.max(5, Math.min(1440, intervalMinutes));
-            await setHeartbeatConfig(chatId, true, interval);
-            return `Heartbeat enabled! Checking every ${interval} minutes.`;
-          }
-          case "off": {
-            await disableHeartbeat(chatId);
-            return "Heartbeat disabled.";
-          }
-          case "status": {
-            const config = await getHeartbeatConfig(chatId);
-            if (!config || !config.enabled) {
-              return "Heartbeat is currently disabled.";
-            }
-            const intervalMin = Math.floor(config.intervalMs / 60000);
-            const lastCheck = new Date(config.lastCheckAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
-            return `Heartbeat is enabled. Interval: ${intervalMin} minutes. Last check: ${lastCheck}`;
-          }
-          default:
-            return "Error: Invalid action";
-        }
-      }
-
-      case "run_heartbeat_check": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const messageSent = await runHeartbeatNow(chatId);
-        if (messageSent) {
-          return "Heartbeat check complete. A notification was sent.";
-        } else {
-          return "Heartbeat check complete. Nothing to report.";
-        }
-      }
-
-      case "control_briefing": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const action = input.action as string;
-        const time = (input.time as string) || "08:00";
-        const city = (input.city as string) || "Seoul";
-
-        switch (action) {
-          case "on": {
-            await setBriefingConfig(chatId, true, time, city);
-            return `Daily briefing enabled! Will send at ${time} (${city}).`;
-          }
-          case "off": {
-            await disableBriefing(chatId);
-            return "Daily briefing disabled.";
-          }
-          case "status": {
-            const config = await getBriefingConfig(chatId);
-            if (!config || !config.enabled) {
-              return "Daily briefing is currently disabled.";
-            }
-            return `Daily briefing is enabled. Time: ${config.time}, City: ${config.city}`;
-          }
-          default:
-            return "Error: Invalid action";
-        }
-      }
-
-      case "send_briefing_now": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        await sendBriefingNow(chatId);
-        return "Briefing sent!";
-      }
-
-      // ============== Sub-Agent 도구 ==============
-      case "spawn_agent": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const task = input.task as string;
-        if (!task || task.trim().length === 0) {
-          return "Error: Task description is required";
-        }
-
-        const agentId = await spawnAgent(task, chatId);
-        return `Sub-agent spawned! 🤖\nID: ${agentId}\nTask: ${task.slice(0, 100)}${task.length > 100 ? "..." : ""}\n\nThe agent is working in the background. Results will be sent to this chat when complete.`;
-      }
-
-      case "list_agents": {
-        const chatId = getCurrentChatId();
-        const agents = listAgents(chatId || undefined);
-
-        if (agents.length === 0) {
-          return "No sub-agents found.";
-        }
-
-        const lines = agents.map((a) => {
-          const status = {
-            running: "🔄 Running",
-            completed: "✅ Completed",
-            failed: "❌ Failed",
-            cancelled: "⏹️ Cancelled",
-          }[a.status];
-
-          const time = a.completedAt
-            ? `(${Math.round((a.completedAt.getTime() - a.createdAt.getTime()) / 1000)}s)`
-            : "";
-
-          return `${a.id}: ${status} ${time}\n   Task: ${a.task.slice(0, 60)}${a.task.length > 60 ? "..." : ""}`;
-        });
-
-        return `Sub-agents:\n${lines.join("\n\n")}`;
-      }
-
-      case "cancel_agent": {
-        const agentId = input.agent_id as string;
-        if (!agentId) {
-          return "Error: Agent ID is required";
-        }
-
-        const success = cancelAgent(agentId);
-        if (success) {
-          return `Sub-agent ${agentId} cancelled.`;
-        } else {
-          return `Could not cancel agent ${agentId}. It may not exist or already completed.`;
-        }
-      }
-
-      // ============== 웹 검색/가져오기 ==============
-      case "web_search": {
-        const query = input.query as string;
-        const count = Math.min(Math.max((input.count as number) || 5, 1), 20);
-
-        const apiKey = await getSecret("brave-api-key");
-        if (!apiKey) {
-          return "Error: Brave API key not configured. Ask user to set it up with: npm run setup brave <API_KEY>";
-        }
-
-        try {
-          const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
-          const response = await fetch(url, {
-            headers: {
-              "Accept": "application/json",
-              "X-Subscription-Token": apiKey,
-            },
-          });
-
-          if (!response.ok) {
-            return `Error: Brave Search API returned ${response.status}: ${response.statusText}`;
-          }
-
-          const data = await response.json();
-          const results = data.web?.results || [];
-
-          if (results.length === 0) {
-            return `No results found for "${query}"`;
-          }
-
-          const formatted = results.map((r: { title: string; url: string; description: string }, i: number) => {
-            return `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.description || ""}`;
-          });
-
-          return `Search results for "${query}":\n\n${formatted.join("\n\n")}`;
-        } catch (error) {
-          return `Error searching: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      }
-
-      case "web_fetch": {
-        const url = input.url as string;
-        const maxChars = (input.maxChars as number) || 5000;
-
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-          return "Error: URL must start with http:// or https://";
-        }
-
-        // SSRF 방지: 사설 IP 차단
-        try {
-          const parsedUrl = new URL(url);
-          if (isPrivateIP(parsedUrl.hostname)) {
-            return "Error: Access to private/internal addresses is not allowed.";
-          }
-        } catch {
-          return "Error: Invalid URL format.";
-        }
-
-        try {
-          const response = await fetch(url, {
-            headers: {
-              "User-Agent": "Mozilla/5.0 (compatible; CompanionBot/1.0)",
-            },
-          });
-
-          if (!response.ok) {
-            return `Error: Failed to fetch URL (${response.status}: ${response.statusText})`;
-          }
-
-          const html = await response.text();
-          const $ = cheerio.load(html);
-
-          // 불필요한 요소 제거
-          $("script, style, nav, header, footer, aside, iframe, noscript").remove();
-
-          // 본문 텍스트 추출
-          let text = "";
-          
-          // article 태그 우선
-          const article = $("article");
-          if (article.length > 0) {
-            text = article.text();
-          } else {
-            // main 태그 시도
-            const main = $("main");
-            if (main.length > 0) {
-              text = main.text();
-            } else {
-              // body 전체
-              text = $("body").text();
-            }
-          }
-
-          // 공백 정리
-          text = text
-            .replace(/\s+/g, " ")
-            .replace(/\n\s*\n/g, "\n")
-            .trim();
-
-          // 길이 제한
-          if (text.length > maxChars) {
-            text = text.slice(0, maxChars) + "... (truncated)";
-          }
-
-          const title = $("title").text().trim() || "No title";
-          return `Title: ${title}\n\nContent:\n${text}`;
-        } catch (error) {
-          return `Error fetching URL: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      }
-
-      // ============== Cron 도구 ==============
-      case "add_cron": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const name = input.name as string;
-        const scheduleExpr = input.schedule as string;
-        const command = (input.payload as string) || (input.command as string) || "";
-
-        if (!name || !scheduleExpr) {
-          return "Error: name and schedule are required";
-        }
-
-        // 스케줄 파싱 (cron expression 또는 한국어)
-        const parsed = parseScheduleExpression(scheduleExpr);
-        const cronExpr = parsed ? parsed.expression : scheduleExpr;
-
-        try {
-          const result = await addCronJob(chatId, name, cronExpr, command);
-          
-          if (!result.success) {
-            return `Error: ${result.message}`;
-          }
-          
-          const job = result.data as { id: string; nextRun?: string };
-          const nextRunStr = job?.nextRun 
-            ? new Date(job.nextRun).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })
-            : "계산 중...";
-
-          return `Cron job created! ⏰
-ID: ${job?.id || "unknown"}
-Name: ${name}
-Schedule: ${cronExpr}
-Next run: ${nextRunStr}`;
-        } catch (error) {
-          return `Error creating cron job: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      }
-
-      case "list_crons": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const showDisabled = (input.show_disabled as boolean) !== false;
-        const result = await listCronJobs(chatId);
-
-        if (!result.success) {
-          return `Error: ${result.message}`;
-        }
-
-        const jobs = (result.data as Array<{ id: string; name: string; enabled: boolean; cronExpr: string; nextRun?: string }>) || [];
-        const filteredJobs = showDisabled ? jobs : jobs.filter((j) => j.enabled);
-
-        if (filteredJobs.length === 0) {
-          return showDisabled 
-            ? "No cron jobs found for this chat."
-            : "No active cron jobs. Use list_crons with show_disabled=true to see all.";
-        }
-
-        const lines = filteredJobs.map((job) => {
-          const status = job.enabled ? "✅" : "⏸️";
-          const scheduleStr = job.cronExpr;
-          
-          const nextRun = job.nextRun
-            ? new Date(job.nextRun).toLocaleString("ko-KR", { 
-                month: "short", 
-                day: "numeric", 
-                hour: "2-digit", 
-                minute: "2-digit",
-                timeZone: "Asia/Seoul"
-              })
-            : "N/A";
-
-          return `${status} [${job.id.slice(0, 8)}] ${job.name || "(unnamed)"}
-   Schedule: ${scheduleStr}
-   Next run: ${nextRun}`;
-        });
-
-        return `Cron jobs (${filteredJobs.length}):\n\n${lines.join("\n\n")}`;
-      }
-
-      case "remove_cron": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const id = input.id as string;
-        if (!id) {
-          return "Error: Cron job ID is required";
-        }
-
-        const result = await removeCronJob(id);
-        if (result.success) {
-          return `Cron job ${id} deleted.`;
-        } else {
-          return `Cron job ${id} not found.`;
-        }
-      }
-
-      case "toggle_cron": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const id = input.id as string;
-        const enabled = input.enabled as boolean;
-
-        if (!id || enabled === undefined) {
-          return "Error: Both id and enabled are required";
-        }
-
-        const result = await setCronJobEnabled(id, enabled);
-        if (result.success) {
-          const status = enabled ? "enabled ✅" : "disabled ⏸️";
-          return `Cron job ${id} is now ${status}.`;
-        } else {
-          return `Cron job ${id} not found.`;
-        }
-      }
-
-      case "run_cron": {
-        const chatId = getCurrentChatId();
-        if (!chatId) {
-          return "Error: No active chat session";
-        }
-
-        const id = input.id as string;
-        if (!id) {
-          return "Error: Cron job ID is required";
-        }
-
-        const success = await runCronJobNow(id);
-        if (success) {
-          return `Cron job ${id} executed! 🚀`;
-        } else {
-          return `Error: Cron job ${id} not found.`;
-        }
-      }
-
-      // ============== 메모리 검색 ==============
-      case "memory_search": {
-        const query = input.query as string;
-        const limit = (input.limit as number) || 5;
-        const minScore = (input.minScore as number) || 0.3;
-        
-        const queryEmbedding = await embed(query);
-        const results = await search(queryEmbedding, limit, minScore);
-        
-        if (results.length === 0) {
-          return "관련 기억을 찾지 못했어.";
-        }
-        
-        return results.map((r, i) => 
-          `[${i + 1}] (${r.source}, score: ${r.score.toFixed(2)})\n${r.text}`
-        ).join('\n\n---\n\n');
-      }
-
-      case "memory_reindex": {
-        const result = await reindexAll();
-        const sourceList = result.sources.length > 5 
-          ? result.sources.slice(0, 5).join(', ') + ` 외 ${result.sources.length - 5}개`
-          : result.sources.join(', ');
-        return `리인덱싱 완료: 총 ${result.total}개 청크 (소스: ${sourceList || '없음'})`;
-      }
+      // 파일 작업
+      case "read_file":
+        return await executeReadFile(input);
+      case "write_file":
+        return await executeWriteFile(input);
+      case "edit_file":
+        return await executeEditFile(input);
+      case "list_directory":
+        return await executeListDirectory(input);
+
+      // 세션/명령어
+      case "run_command":
+        return await executeRunCommand(input);
+      case "list_sessions":
+        return executeListSessions(input);
+      case "get_session_log":
+        return executeGetSessionLog(input);
+      case "kill_session":
+        return executeKillSession(input);
+
+      // 모델
+      case "change_model":
+        return executeChangeModel(input);
+
+      // 메모리
+      case "save_memory":
+        return await executeSaveMemory(input);
+      case "save_persona":
+        return await executeSavePersona(input);
+      case "memory_search":
+        return await executeMemorySearch(input);
+      case "memory_reindex":
+        return await executeMemoryReindex();
+
+      // 날씨
+      case "get_weather":
+        return await executeGetWeather(input);
+
+      // 리마인더
+      case "set_reminder":
+        return await executeSetReminder(input);
+      case "list_reminders":
+        return await executeListReminders();
+      case "cancel_reminder":
+        return await executeCancelReminder(input);
+
+      // 캘린더
+      case "get_calendar_events":
+        return await executeGetCalendarEvents(input);
+      case "add_calendar_event":
+        return await executeAddCalendarEvent(input);
+      case "delete_calendar_event":
+        return await executeDeleteCalendarEvent(input);
+
+      // Heartbeat
+      case "control_heartbeat":
+        return await executeControlHeartbeat(input);
+      case "run_heartbeat_check":
+        return await executeRunHeartbeatCheck();
+
+      // Briefing
+      case "control_briefing":
+        return await executeControlBriefing(input);
+      case "send_briefing_now":
+        return await executeSendBriefingNow();
+
+      // Sub-Agent
+      case "spawn_agent":
+        return await executeSpawnAgent(input);
+      case "list_agents":
+        return executeListAgents();
+      case "cancel_agent":
+        return executeCancelAgent(input);
+
+      // 웹
+      case "web_search":
+        return await executeWebSearch(input);
+      case "web_fetch":
+        return await executeWebFetch(input);
+
+      // Cron
+      case "add_cron":
+        return await executeAddCron(input);
+      case "list_crons":
+        return await executeListCrons(input);
+      case "remove_cron":
+        return await executeRemoveCron(input);
+      case "toggle_cron":
+        return await executeToggleCron(input);
+      case "run_cron":
+        return await executeRunCron(input);
 
       default:
         return `Error: Unknown tool: ${name}`;

@@ -2,15 +2,7 @@ import { MODELS, type ModelId, type Message } from "../../ai/claude.js";
 import { getWorkspacePath } from "../../workspace/index.js";
 import { getToolsDescription } from "../../tools/index.js";
 import { getWorkspace } from "./cache.js";
-import { embed } from "../../memory/embeddings.js";
-import { search } from "../../memory/vectorStore.js";
 import { buildContextForPrompt, getCurrentChatId } from "../../session/state.js";
-import {
-  SEARCH_CONTEXT_LENGTH,
-  PROMPT_MEMORY_SEARCH_LIMIT,
-  PROMPT_MEMORY_MIN_SCORE,
-  MEMORY_PREVIEW_LENGTH,
-} from "../../utils/constants.js";
 import * as os from "os";
 
 // ============== Runtime 정보 ==============
@@ -79,35 +71,6 @@ export function extractName(identityContent: string | null): string | null {
   return null;
 }
 
-// ============== 메모리 검색 ==============
-
-function extractSearchContext(history: Message[]): string {
-  const recent = history.slice(-3);
-  return recent
-    .filter((m) => m.role === "user")
-    .map((m) => (typeof m.content === "string" ? m.content : ""))
-    .join(" ")
-    .slice(0, SEARCH_CONTEXT_LENGTH);
-}
-
-async function getRelevantMemories(history: Message[]): Promise<string> {
-  try {
-    const context = extractSearchContext(history);
-    if (!context.trim()) return "";
-
-    const queryEmbedding = await embed(context);
-    const results = await search(queryEmbedding, PROMPT_MEMORY_SEARCH_LIMIT, PROMPT_MEMORY_MIN_SCORE);
-
-    if (results.length === 0) return "";
-
-    return results
-      .map((r) => `- (${r.source}): ${r.text.slice(0, MEMORY_PREVIEW_LENGTH)}${r.text.length > MEMORY_PREVIEW_LENGTH ? "..." : ""}`)
-      .join("\n");
-  } catch {
-    return "";
-  }
-}
-
 // ============== Core Identity 빌더 ==============
 
 function buildCoreIdentity(name: string | null): string {
@@ -135,11 +98,8 @@ You are NOT a generic assistant or chatbot. You are someone developing a real re
 // ============== 메인 빌드 함수 ==============
 
 export async function buildSystemPrompt(modelId: ModelId, history?: Message[]): Promise<string> {
-  // 🚀 병렬 실행: 워크스페이스 로드 + 관련 메모리 검색
-  const [workspace, relevantMemoriesResult] = await Promise.all([
-    getWorkspace(),
-    history && history.length > 0 ? getRelevantMemories(history) : Promise.resolve(""),
-  ]);
+  // 워크스페이스 로드 (메모리 검색은 memory_search 도구로 필요시에만)
+  const workspace = await getWorkspace();
   
   const runtime = getRuntimeInfo(modelId);
   const dateTime = getKoreanDateTime();
@@ -221,15 +181,7 @@ export async function buildSystemPrompt(modelId: ModelId, history?: Message[]): 
     parts.push("");
   }
 
-  // 관련 기억 (벡터 검색) - 위에서 병렬로 미리 가져옴
-  if (relevantMemoriesResult) {
-    parts.push("# Relevant Memories");
-    parts.push("");
-    parts.push("Related information from older records:");
-    parts.push("");
-    parts.push(relevantMemoriesResult);
-    parts.push("");
-  }
+  // 관련 기억: memory_search 도구로 필요시에만 검색 (자동 검색 제거됨)
 
   // 장기 기억
   if (workspace.memory) {
