@@ -64,6 +64,7 @@ import {
   unpinContext,
   clearPins,
   getSessionStats,
+  addMessage,
 } from "../../session/state.js";
 import {
   hasBootstrap,
@@ -123,7 +124,7 @@ export function registerCommands(bot: Bot): void {
         const modelId = getModel(chatId);
         const systemPrompt = await buildSystemPrompt(modelId);
 
-        // 첫 메시지 생성 요청
+        // 첫 메시지 생성 요청 (시스템 메시지는 JSONL에 저장 안 함 - 세션 내부용)
         history.push({
           role: "user",
           content: "[시스템: 사용자가 /start를 눌렀습니다. 온보딩을 시작하세요.]",
@@ -131,7 +132,8 @@ export function registerCommands(bot: Bot): void {
 
         try {
           const result = await chat(history, systemPrompt, modelId);
-          history.push({ role: "assistant", content: result.text });
+          // 온보딩 응답도 JSONL에 저장
+          addMessage(chatId, "assistant", result.text);
           await ctx.reply(result.text);
         } catch (error) {
           console.error("Bootstrap start error:", error);
@@ -890,7 +892,8 @@ export function registerCommands(bot: Bot): void {
 
     await ctx.reply(
       `📊 맥락 상태\n\n` +
-      `💬 히스토리: ${stats.historyLength}개 메시지 (~${stats.historyTokens} 토큰)\n` +
+      `💬 메모리: ${stats.historyLength}개 메시지 (~${stats.historyTokens} 토큰)\n` +
+      `💾 저장됨: ${stats.totalPersistedCount}개 (JSONL 파일)\n` +
       `📌 핀: ${stats.pinnedCount}개 (~${stats.pinnedTokens} 토큰)\n` +
       `📜 요약: ${stats.summaryCount}개\n\n` +
       `명령어:\n` +

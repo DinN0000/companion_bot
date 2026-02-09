@@ -9,7 +9,9 @@ import {
   smartTrimHistory,
   detectImportantContext,
   pinContext,
+  addMessage,
 } from "../../session/state.js";
+import * as persistence from "../../session/persistence.js";
 import { updateLastMessageTime } from "../../heartbeat/index.js";
 import {
   extractUrls,
@@ -190,7 +192,10 @@ export function registerMessageHandlers(bot: Bot): void {
           },
         ];
 
+        // API용 메모리 히스토리에는 이미지 데이터 포함
         history.push({ role: "user", content: imageContent });
+        // JSONL에는 캡션만 저장 (이미지 base64는 너무 큼)
+        persistence.appendMessage(chatId, "user", `[이미지] ${caption}`);
 
         try {
           const systemPrompt = await buildSystemPrompt(modelId, history);
@@ -204,7 +209,9 @@ export function registerMessageHandlers(bot: Bot): void {
               .join("\n");
             assistantContent = `[도구 사용: ${result.toolsUsed.map(t => t.name).join(", ")}]\n${toolsSummary}\n\n---\n${result.text}`;
           }
+          // 메모리 + JSONL 영구 저장
           history.push({ role: "assistant", content: assistantContent });
+          persistence.appendMessage(chatId, "assistant", assistantContent);
 
           // 토큰 기반 히스토리 트리밍
           trimHistoryByTokens(history);
@@ -225,6 +232,7 @@ export function registerMessageHandlers(bot: Bot): void {
           }
           
           history.push({ role: "assistant", content: `[응답 실패] ${userErrorMsg}` });
+          persistence.appendMessage(chatId, "assistant", `[응답 실패] ${userErrorMsg}`);
           
           recordError();
           console.error(`[Photo] chatId=${chatId} error:`, errorMsg);
@@ -304,8 +312,8 @@ export function registerMessageHandlers(bot: Bot): void {
         }
       }
 
-      // 히스토리에는 간략 버전 저장
-      history.push({ role: "user", content: messageForHistory });
+      // 히스토리에는 간략 버전 저장 + JSONL에 영구 저장
+      addMessage(chatId, "user", messageForHistory);
 
       try {
         const systemPrompt = await buildSystemPrompt(modelId, history);
@@ -332,7 +340,8 @@ export function registerMessageHandlers(bot: Bot): void {
           modelId
         );
 
-        history.push({ role: "assistant", content: response });
+        // 메모리 + JSONL에 영구 저장
+        addMessage(chatId, "assistant", response);
 
         // 스마트 트리밍 (요약 포함) - autoCompactIfNeeded 대체
         const summarizeFn = async (messages: Message[]) => {
@@ -370,8 +379,8 @@ export function registerMessageHandlers(bot: Bot): void {
           userErrorMsg = `문제가 생겼어: ${errorMsg.slice(0, 100)}`;
         }
         
-        // 에러 메시지를 assistant 응답으로 기록 (히스토리 컨텍스트 유지)
-        history.push({ role: "assistant", content: `[응답 실패] ${userErrorMsg}` });
+        // 에러 메시지를 assistant 응답으로 기록 (히스토리 컨텍스트 유지) + JSONL 저장
+        addMessage(chatId, "assistant", `[응답 실패] ${userErrorMsg}`);
         
         await ctx.reply(userErrorMsg);
       }

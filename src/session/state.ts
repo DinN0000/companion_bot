@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "async_hooks";
 import type { ModelId } from "../ai/claude.js";
 import type { Message } from "../ai/claude.js";
 import { estimateMessagesTokens, estimateTokens } from "../utils/tokens.js";
+import * as persistence from "./persistence.js";
 
 // 세션 설정
 const MAX_SESSIONS = 100;
@@ -12,6 +13,9 @@ const MAX_HISTORY_TOKENS = 40000; // 히스토리 한도
 const SUMMARY_THRESHOLD_TOKENS = 25000; // 이 이상이면 요약 시작
 const MIN_RECENT_MESSAGES = 6; // 최소 유지할 최근 메시지
 const MAX_PINNED_TOKENS = 5000; // 핀 맥락 최대 토큰
+
+// 영구 저장 설정
+const MAX_HISTORY_LOAD = 50; // 메모리에 로드할 최대 메시지 수
 
 /**
  * 핀된 맥락 - 중요한 정보를 별도 보관
@@ -75,8 +79,20 @@ function getSession(chatId: number): SessionData {
   // 새 세션 생성 전 정리
   cleanupSessions();
 
+  // 기존 JSONL 파일에서 히스토리 로드
+  const persistedMessages = persistence.loadHistorySync(chatId, MAX_HISTORY_LOAD);
+  const history: Message[] = persistedMessages.map(pm => ({
+    role: pm.role,
+    content: pm.content,
+  }));
+
+  if (persistedMessages.length > 0) {
+    const totalCount = persistence.getHistoryCount(chatId);
+    console.log(`[Session] Loaded ${persistedMessages.length}/${totalCount} messages from JSONL for chatId=${chatId}`);
+  }
+
   const session: SessionData = {
-    history: [],
+    history,
     model: "sonnet",
     lastAccessedAt: now,
     pinnedContexts: [],
@@ -115,6 +131,26 @@ export function getHistory(chatId: number): Message[] {
     session.history = [];
   }
   return session.history;
+}
+
+/**
+ * 메시지 추가 (메모리 + JSONL 파일 동기화)
+ */
+export function addMessage(chatId: number, role: "user" | "assistant", content: string): void {
+  const history = getHistory(chatId);
+  history.push({ role, content });
+  
+  // JSONL 파일에도 영구 저장
+  persistence.appendMessage(chatId, role, content);
+}
+
+/**
+ * 여러 메시지 추가 (배치)
+ */
+export function addMessages(chatId: number, messages: Array<{ role: "user" | "assistant"; content: string }>): void {
+  for (const msg of messages) {
+    addMessage(chatId, msg.role, msg.content);
+  }
 }
 
 /**
@@ -380,10 +416,11 @@ export function clearHistory(chatId: number): void {
 }
 
 /**
- * 완전 초기화 (핀 포함)
+ * 완전 초기화 (핀 포함 + JSONL 파일 삭제)
  */
 export function clearSession(chatId: number): void {
   sessions.delete(chatId);
+  persistence.deleteSessionFile(chatId);
 }
 
 export function getModel(chatId: number): ModelId {
@@ -421,6 +458,7 @@ export function getSessionStats(chatId: number): {
   pinnedCount: number;
   pinnedTokens: number;
   summaryCount: number;
+  totalPersistedCount: number;
 } {
   const session = getSession(chatId);
   return {
@@ -432,5 +470,14 @@ export function getSessionStats(chatId: number): {
       0
     ),
     summaryCount: session.summaryChunks.length,
+    totalPersistedCount: persistence.getHistoryCount(chatId),
   };
 }
+
+// Re-export persistence functions for external use
+export {
+  searchHistory,
+  getHistoryCount,
+  sessionFileExists,
+  listSessionFiles,
+} from "./persistence.js";
