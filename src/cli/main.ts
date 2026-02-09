@@ -74,7 +74,7 @@ CompanionBot은 Telegram에서 동작하는 개인 AI 비서예요.
           { name: "🔍 웹 검색 - Brave API, 무료 2000/월", value: "webSearch" },
           { name: "📅 캘린더 - Google Calendar 연동", value: "calendar" },
           { name: "🌤️  날씨 - OpenWeatherMap, 무료", value: "weather" },
-          { name: "● 건너뛰기", value: "skip" },
+          { name: "● 다음으로", value: "skip" },
         ],
       });
     } catch {
