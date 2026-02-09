@@ -20,6 +20,32 @@ export function extractName(identityContent: string | null): string | null {
 }
 
 /**
+ * 현재 날짜/시간을 한국어 포맷으로 반환합니다.
+ */
+function getKoreanDateTime(): { formatted: string; timezone: string } {
+  const now = new Date();
+  const timezone = "Asia/Seoul";
+
+  const formatter = new Intl.DateTimeFormat("ko-KR", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  const formatted = formatter.format(now);
+
+  return {
+    formatted,
+    timezone: `${timezone} (GMT+9)`,
+  };
+}
+
+/**
  * 시스템 프롬프트를 동적으로 생성합니다.
  */
 export async function buildSystemPrompt(modelId: ModelId): Promise<string> {
@@ -30,6 +56,14 @@ export async function buildSystemPrompt(modelId: ModelId): Promise<string> {
   // 기본 정보
   parts.push(`You are a personal AI companion running on ${model.name}.`);
   parts.push(`Workspace: ${getWorkspacePath()}`);
+
+  // 런타임 정보 (날짜/시간)
+  const dateTime = getKoreanDateTime();
+  parts.push(`Current time: ${dateTime.formatted}`);
+  parts.push(`Timezone: ${dateTime.timezone}`);
+
+  // 채널/플랫폼 정보
+  parts.push(`Runtime: channel=telegram | capabilities=markdown,inline_keyboard,reactions | version=0.4.x`);
 
   // BOOTSTRAP 모드인 경우
   if (workspace.bootstrap) {

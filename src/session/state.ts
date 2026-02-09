@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "async_hooks";
 import type { ModelId } from "../ai/claude.js";
 import type { Message } from "../ai/claude.js";
+import { estimateMessagesTokens } from "../utils/tokens.js";
 
 // 세션 설정
 const MAX_SESSIONS = 100;
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24시간
+const MAX_HISTORY_TOKENS = 50000; // 시스템 프롬프트 + 응답 여유 남기고
 
 type SessionData = {
   history: Message[];
@@ -63,6 +65,16 @@ function cleanupSessions(): void {
 
 export function getHistory(chatId: number): Message[] {
   return getSession(chatId).history;
+}
+
+/**
+ * 히스토리를 토큰 기반으로 트리밍한다.
+ * 최대 토큰 한도를 초과하면 가장 오래된 메시지부터 제거 (최소 2개는 유지).
+ */
+export function trimHistoryByTokens(history: Message[]): void {
+  while (estimateMessagesTokens(history) > MAX_HISTORY_TOKENS && history.length > 2) {
+    history.shift();
+  }
 }
 
 export function clearHistory(chatId: number): void {

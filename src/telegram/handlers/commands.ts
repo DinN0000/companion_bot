@@ -1,6 +1,50 @@
 import { Bot } from "grammy";
 import { randomBytes } from "crypto";
-import { chat, MODELS, type ModelId } from "../../ai/claude.js";
+import { chat, MODELS, type ModelId, type Message } from "../../ai/claude.js";
+
+// 토큰 추정 함수 (대략적: 한글 1자 ≈ 1-2 토큰, 영어 4자 ≈ 1 토큰)
+function estimateTokens(text: string): number {
+  const koreanChars = (text.match(/[\u3131-\uD79D]/g) || []).length;
+  const otherChars = text.length - koreanChars;
+  return Math.ceil(koreanChars * 1.5 + otherChars / 4);
+}
+
+function estimateMessagesTokens(messages: Message[]): number {
+  return messages.reduce((total, msg) => {
+    const content = typeof msg.content === "string" 
+      ? msg.content 
+      : JSON.stringify(msg.content);
+    return total + estimateTokens(content) + 4; // 4 for role overhead
+  }, 0);
+}
+
+// 대화 요약 생성 함수
+async function generateSummary(messages: Message[]): Promise<string> {
+  const conversationText = messages.map(m => {
+    const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    return `${m.role === "user" ? "사용자" : "AI"}: ${content}`;
+  }).join("\n");
+  
+  const summaryPrompt = [
+    {
+      role: "user" as const,
+      content: `다음 대화를 핵심만 담아 간결하게 요약해줘. 중요한 결정사항, 사용자 정보, 맥락만 포함하고 3-5문장 이내로:
+
+${conversationText}
+
+요약:`
+    }
+  ];
+  
+  try {
+    // haiku로 빠르게 요약 생성
+    const summary = await chat(summaryPrompt, undefined, "haiku");
+    return summary;
+  } catch (error) {
+    console.error("Summary generation error:", error);
+    return "이전 대화 내용 (요약 생성 실패)";
+  }
+}
 
 // Reset 토큰 관리 (1분 만료)
 const resetTokens = new Map<number, { token: string; expiresAt: number }>();
@@ -176,11 +220,36 @@ export function registerCommands(bot: Bot): void {
       return;
     }
 
-    // 최근 4개만 남기고 정리
-    const removed = history.length - 4;
-    history.splice(0, removed);
+    // 현재 토큰 수 계산
+    const currentTokens = estimateMessagesTokens(history);
+    
+    await ctx.replyWithChatAction("typing");
+    await ctx.reply(`📊 현재: ${history.length}개 메시지, ~${currentTokens} 토큰\n요약 생성 중...`);
 
-    await ctx.reply(`대화 정리 완료! ${removed}개 메시지 압축했어.`);
+    // 요약할 메시지와 유지할 최근 메시지 분리
+    const recentMessages = history.slice(-4);
+    const oldMessages = history.slice(0, -4);
+
+    // 요약 생성
+    const summary = await generateSummary(oldMessages);
+
+    // 히스토리 교체: 요약 + 최근 4개
+    history.splice(0, history.length);
+    history.push({ 
+      role: "user", 
+      content: `[이전 대화 요약]\n${summary}` 
+    });
+    history.push(...recentMessages);
+
+    // 새 토큰 수 계산
+    const newTokens = estimateMessagesTokens(history);
+    const savedPercent = Math.round((1 - newTokens / currentTokens) * 100);
+
+    await ctx.reply(
+      `✨ 대화 정리 완료!\n\n` +
+      `📉 ${currentTokens} → ${newTokens} 토큰\n` +
+      `💾 약 ${savedPercent}% 절약 (${oldMessages.length}개 → 요약 1개)`
+    );
   });
 
   // /memory 명령어 - 최근 기억 보기

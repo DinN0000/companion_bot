@@ -208,7 +208,7 @@ async function executeAgentTurn(
 - This is a scheduled task, not a direct user message.`;
 
     // Call Claude API
-    const response = await chat(messages, systemPrompt, "sonnet" as ModelId);
+    const response = await chat(messages, systemPrompt, "sonnet");
 
     // Send the response to the chat
     if (response && response.trim()) {

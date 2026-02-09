@@ -4,6 +4,7 @@ import {
   getHistory,
   getModel,
   runWithChatId,
+  trimHistoryByTokens,
 } from "../../session/state.js";
 import { updateLastMessageTime } from "../../heartbeat/index.js";
 import {
@@ -75,10 +76,8 @@ export function registerMessageHandlers(bot: Bot): void {
 
         history.push({ role: "assistant", content: result });
 
-        // 히스토리 제한
-        if (history.length > 20) {
-          history.splice(0, history.length - 20);
-        }
+        // 토큰 기반 히스토리 트리밍
+        trimHistoryByTokens(history);
 
         await ctx.reply(result);
       } catch (error) {
@@ -136,10 +135,8 @@ export function registerMessageHandlers(bot: Bot): void {
 
         history.push({ role: "assistant", content: response });
 
-        // 히스토리 제한 (최근 20개 메시지만 유지)
-        if (history.length > 20) {
-          history.splice(0, history.length - 20);
-        }
+        // 토큰 기반 히스토리 트리밍
+        trimHistoryByTokens(history);
 
         await ctx.reply(response);
       } catch (error) {
