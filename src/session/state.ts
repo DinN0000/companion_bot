@@ -50,8 +50,8 @@ function getSession(chatId: number): SessionData {
     console.error(`[Session] BUG: Invalid chatId: ${chatId} - history will NOT persist!`);
     return {
       history: [],
-      model: "sonnet",
-      thinkingLevel: config.thinking,
+      model: config.model.default,
+      thinkingLevel: config.model.thinking,
       lastAccessedAt: Date.now(),
       pinnedContexts: [],
       summaryChunks: [],
@@ -66,7 +66,7 @@ function getSession(chatId: number): SessionData {
     // 마이그레이션: 기존 세션에 새 필드 추가
     if (!existing.pinnedContexts) existing.pinnedContexts = [];
     if (!existing.summaryChunks) existing.summaryChunks = [];
-    if (!existing.thinkingLevel) existing.thinkingLevel = config.thinking;
+    if (!existing.thinkingLevel) existing.thinkingLevel = config.model.thinking;
     return existing;
   }
 
@@ -87,8 +87,8 @@ function getSession(chatId: number): SessionData {
 
   const session: SessionData = {
     history,
-    model: "sonnet",
-    thinkingLevel: config.thinking,
+    model: config.model.default,
+    thinkingLevel: config.model.thinking,
     lastAccessedAt: now,
     pinnedContexts: [],
     summaryChunks: [],
