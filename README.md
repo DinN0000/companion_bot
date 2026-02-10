@@ -31,24 +31,63 @@ companionbot
 터미널에서 실행하는 명령어:
 
 ```bash
-companionbot              # 봇 시작
-companionbot setup        # 전체 설정 마법사
+companionbot              # 봇 시작 (첫 실행 시 설정 마법사 자동 시작)
+companionbot setup        # 설정 마법사 (전체)
+companionbot setup telegram  # Telegram 토큰 설정
+companionbot setup anthropic # Anthropic API 키 설정
 companionbot setup weather   # 날씨 API 설정
 companionbot setup calendar  # Google Calendar 연동
 companionbot setup brave     # 웹 검색 API 설정
+companionbot --help       # 도움말
+companionbot --version    # 버전 확인
 ```
+
+### 비대화형 모드
+
+CI/CD나 스크립트에서 사용할 때:
+
+```bash
+companionbot -n           # --no-interactive 모드
+```
+
+환경변수로 설정 (비대화형 모드에서 사용):
+- `TELEGRAM_BOT_TOKEN` - Telegram 봇 토큰
+- `ANTHROPIC_API_KEY` - Anthropic API 키
 
 ## 📱 텔레그램 명령어
 
 봇과 대화할 때 사용하는 명령어:
 
+### 기본 명령어
+
 | 명령어 | 설명 |
 |--------|------|
+| `/start` | 봇 시작 |
 | `/help` | 도움말 보기 |
 | `/model` | AI 모델 변경 (haiku/sonnet/opus) |
 | `/compact` | 대화 정리 (토큰 절약) |
 | `/memory` | 최근 기억 보기 |
 | `/health` | 봇 상태 확인 |
+| `/reset` | 대화 초기화 |
+
+### 고급 기능
+
+| 명령어 | 설명 |
+|--------|------|
+| `/calendar_setup` | Google Calendar 연동 설정 |
+| `/weather_setup` | 날씨 도시 설정 |
+| `/briefing` | 브리핑 설정/실행 |
+| `/reminders` | 리마인더 목록 보기 |
+| `/heartbeat` | 하트비트 상태 확인 |
+
+### 컨텍스트 관리
+
+| 명령어 | 설명 |
+|--------|------|
+| `/pin <메시지>` | 메시지 고정 (항상 컨텍스트에 포함) |
+| `/pins` | 고정된 메시지 목록 |
+| `/unpin <번호>` | 고정 해제 |
+| `/context` | 현재 컨텍스트 상태 확인 |
 
 ### 자연어로도 가능
 

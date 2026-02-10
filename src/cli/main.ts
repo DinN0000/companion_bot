@@ -538,6 +538,14 @@ Docker 예시:
       await setSecret("openweathermap-api-key", process.env.OPENWEATHERMAP_API_KEY);
     }
 
+    // 환경변수 기반으로 features 자동 설정
+    const features: FeatureSelection = {
+      webSearch: !!process.env.BRAVE_API_KEY,
+      weather: !!process.env.OPENWEATHERMAP_API_KEY,
+      calendar: false, // OAuth 필요하므로 non-interactive에서는 비활성화
+    };
+    saveFeatures(features);
+
     console.log("✓ Non-interactive 모드: 환경변수에서 설정 로드됨");
   } else {
     // Interactive 모드: 키체인에서 읽기
@@ -649,11 +657,11 @@ Docker 예시:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
    📱 명령어 목록:
-   /help       - 도움말
-   /model      - AI 모델 변경 (haiku/sonnet/opus)
-   /compact    - 대화 요약 (토큰 절약)
-   /health     - 상태 확인
-   /calendar   - 캘린더 연동 (Google)
+   /help           - 도움말
+   /model          - AI 모델 변경 (haiku/sonnet/opus)
+   /compact        - 대화 요약 (토큰 절약)
+   /health         - 상태 확인
+   /calendar_setup - 캘린더 연동 (Google)
 
    ⌨️  Ctrl+C로 종료
    📂 워크스페이스: ${workspacePath}
