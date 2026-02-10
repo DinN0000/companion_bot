@@ -244,9 +244,11 @@ export function registerMessageHandlers(bot: Bot): void {
 
           typingIndicator.stop();
           
-          // 빈 응답 체크
-          const responseText = result.text.trim() || "(사진 분석 완료)";
-          await ctx.reply(responseText);
+          // 빈 응답이면 메시지 안 보냄
+          const responseText = result.text.trim();
+          if (responseText) {
+            await ctx.reply(responseText);
+          }
         } catch (innerError) {
           typingIndicator.stop();
           
@@ -368,14 +370,12 @@ export function registerMessageHandlers(bot: Bot): void {
 
         typingIndicator.stop();
         
-        // 빈 응답 체크 (도구만 실행하고 텍스트 없을 때)
-        const responseText = result.text.trim() || "(작업 완료)";
-        
-        // 응답 전송 (긴 응답은 분할)
-        await sendResponse(ctx, responseText);
-
-        // 메모리 + JSONL에 영구 저장
-        addMessage(chatId, "assistant", responseText);
+        // 빈 응답이면 메시지 안 보냄 (도구만 실행한 경우)
+        const responseText = result.text.trim();
+        if (responseText) {
+          await sendResponse(ctx, responseText);
+          addMessage(chatId, "assistant", responseText);
+        }
 
         // 스마트 트리밍 (요약 포함) - autoCompactIfNeeded 대체
         const summarizeFn = async (messages: Message[]) => {
