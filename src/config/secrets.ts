@@ -14,8 +14,27 @@ export async function getSecret(key: SecretKey): Promise<string | null> {
   }
 }
 
+export class KeychainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KeychainError";
+  }
+}
+
 export async function setSecret(key: SecretKey, value: string): Promise<void> {
-  await keytar.setPassword(SERVICE_NAME, key, value);
+  try {
+    await keytar.setPassword(SERVICE_NAME, key, value);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    throw new KeychainError(
+      `키체인 저장 실패: ${msg}\n\n` +
+      `해결 방법:\n` +
+      `  • macOS: 시스템 설정 > 개인정보 보호 > 키체인 접근 허용\n` +
+      `  • Linux: libsecret 설치 (sudo apt install libsecret-1-0)\n` +
+      `  • Docker/서버: 환경변수 사용\n` +
+      `    TELEGRAM_TOKEN=xxx ANTHROPIC_API_KEY=xxx companionbot`
+    );
+  }
 }
 
 export async function deleteSecret(key: SecretKey): Promise<boolean> {
