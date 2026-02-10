@@ -366,9 +366,5 @@ export function formatErrorForUser(error: unknown, showTechnical = true): string
     msg += `\n\n🔧 상세: ${shortTech}${friendly.technicalMessage.length > 100 ? "..." : ""}`;
   }
   
-  if (friendly.suggestedAction) {
-    msg += `\n\n${friendly.suggestedAction}`;
-  }
-  
   return msg;
 }
