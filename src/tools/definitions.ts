@@ -103,11 +103,11 @@ export const compactTools = [
   },
   {
     name: "save_memory",
-    description: "Save important info to daily memory (user_info, preference, event, etc.)",
+    description: "중요한 정보 저장. 사용자 정보, 선호도, 약속, 결정 등 나중에 기억해야 할 것들",
     input_schema: {
       type: "object" as const,
       properties: {
-        content: { type: "string", description: "Information to remember" },
+        content: { type: "string", description: "기억할 내용" },
         category: { type: "string", enum: ["user_info", "preference", "event", "project", "decision", "emotion", "other"] },
       },
       required: ["content"],
@@ -115,11 +115,11 @@ export const compactTools = [
   },
   {
     name: "memory_search",
-    description: "Semantic search through long-term memories",
+    description: "과거 기억 검색. 이전에 나눈 대화, 저장한 정보, 사용자 선호도 등을 찾을 때 사용",
     input_schema: {
       type: "object" as const,
       properties: {
-        query: { type: "string" },
+        query: { type: "string", description: "검색할 내용" },
         limit: { type: "number", description: "Max results (default: 5)" },
         minScore: { type: "number", description: "Min similarity 0-1 (default: 0.3)" },
       },
@@ -135,11 +135,11 @@ export const compactTools = [
   // === 날씨/웹 ===
   {
     name: "get_weather",
-    description: "Get current weather for a city",
+    description: "현재 날씨 조회. 외출, 옷차림, 우산 필요 여부 등 물어볼 때 사용",
     input_schema: {
       type: "object" as const,
       properties: {
-        city: { type: "string" },
+        city: { type: "string", description: "도시명 (예: Seoul, Tokyo)" },
         country: { type: "string", description: "Country code (optional)" },
       },
       required: ["city"],
@@ -147,11 +147,11 @@ export const compactTools = [
   },
   {
     name: "web_search",
-    description: "Search web via Brave API",
+    description: "웹 검색 (Brave API). 최신 정보, 뉴스, 사실 확인이 필요할 때 사용. 검색어로 관련 결과 반환",
     input_schema: {
       type: "object" as const,
       properties: {
-        query: { type: "string" },
+        query: { type: "string", description: "검색어" },
         count: { type: "number", description: "Results count (default: 5, max: 20)" },
       },
       required: ["query"],
@@ -159,11 +159,11 @@ export const compactTools = [
   },
   {
     name: "web_fetch",
-    description: "Extract readable content from URL",
+    description: "URL에서 웹페이지 본문 추출. 링크 내용 확인, 기사 읽기, 문서 요약 등에 사용. HTML → 텍스트 변환",
     input_schema: {
       type: "object" as const,
       properties: {
-        url: { type: "string" },
+        url: { type: "string", description: "가져올 웹페이지 URL" },
         maxChars: { type: "number", description: "Max chars (default: 5000)" },
       },
       required: ["url"],
