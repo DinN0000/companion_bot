@@ -6,3 +6,6 @@ export { buildSystemPrompt, extractName } from "./prompt.js";
 
 // Cache utilities
 export { getWorkspace, invalidateWorkspaceCache, preloadWorkspace, isWorkspaceCached } from "./cache.js";
+
+// Timestamp utilities
+export { formatMessageTimestamp, addTimestampToMessage } from "./timestamp.js";

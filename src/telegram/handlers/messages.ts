@@ -19,6 +19,7 @@ import {
   fetchWebContent,
   formatUrlContent,
   buildSystemPrompt,
+  formatMessageTimestamp,
 } from "../utils/index.js";
 import { estimateMessagesTokens } from "../../utils/tokens.js";
 import { TOKENS, TELEGRAM } from "../../config/constants.js";
@@ -199,8 +200,9 @@ export function registerMessageHandlers(bot: Bot): void {
         const buffer = await response.arrayBuffer();
         const base64 = Buffer.from(buffer).toString("base64");
 
-        // 캡션이 있으면 사용, 없으면 기본 질문
-        const caption = ctx.message.caption || "이 사진에 뭐가 있어?";
+        // 캡션이 있으면 사용, 없으면 기본 질문 (타임스탬프 포함)
+        const rawCaption = ctx.message.caption || "이 사진에 뭐가 있어?";
+        const caption = `${formatMessageTimestamp()} ${rawCaption}`;
 
         // 이미지와 텍스트를 함께 전송
         const imageContent = [
@@ -220,7 +222,7 @@ export function registerMessageHandlers(bot: Bot): void {
 
         // API용 메모리 히스토리에는 이미지 데이터 포함
         history.push({ role: "user", content: imageContent });
-        // JSONL에는 캡션만 저장 (이미지 base64는 너무 큼)
+        // JSONL에는 캡션만 저장 (이미지 base64는 너무 큼) - caption에 이미 타임스탬프 포함
         persistence.appendMessage(chatId, "user", `[이미지] ${caption}`);
 
         try {
@@ -336,8 +338,9 @@ export function registerMessageHandlers(bot: Bot): void {
         }
       }
 
-      // 히스토리에는 간략 버전 저장 + JSONL에 영구 저장
-      addMessage(chatId, "user", messageForHistory);
+      // 히스토리에는 간략 버전 저장 + JSONL에 영구 저장 (타임스탬프 포함)
+      const timestampedMessage = formatMessageTimestamp() + " " + messageForHistory;
+      addMessage(chatId, "user", timestampedMessage);
 
       // Typing indicator 시작 (긴 작업 동안 유지)
       const typingIndicator = new TypingIndicator(ctx);
